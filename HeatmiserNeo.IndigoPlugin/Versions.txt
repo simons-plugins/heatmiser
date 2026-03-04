@@ -1,0 +1,104 @@
+Date		Version		Module							Changes
+-----------------------------------------------------------------------------------------
+100517		0.1.3		plugin.py				Add code for automatic version checking
+						PluginConfig.xml		and optional email notification.
+
+110517		0.1.4		plugin.py				Add menu option to manually check for
+						MenuItems.xml			plug-in updates.
+
+150717		0.1.5		plugin.py				Ignore commands to increase or decrease
+												cool setpoint, sent by Indigo Touch when
+												changing heat setpoint.
+
+150717		0.1.6		plugin.py				Add function to retrieve Neohub firmware
+						Devices.xml				version and store as a custom state in
+												first Neostat device.
+
+120917		0.2.0		plugin.py				Add config function to allow logging of
+						PluginConfig.xml		Neo comms to Indigo Event Log.
+
+140917		0.2.1		plugin.py				Publish error messages from Neohub in
+												Indigo Event Log to aid diagnosis of
+												problems.
+
+140917		0.2.2		plugin.py				Add code to update heatIsOn state for
+												Neostats in timeclock mode.
+
+170917		0.2.3		plugin.py				Bug fix for Heatmiser Neo actions.
+
+210917		0.2.4		plugin.py				Improve action callback error handling.
+
+301017		0.3.0		plugin.py				Make time sync with Indigo optional and
+						Devices.xml				switch Neo NTP status accordingly. Also
+						PluginConfig.xml		create custom states for these settings.
+						
+301017		0.3.1		plugin.py				Added a device state to show the Neo
+						Devices.xml				'Away' status.
+
+051117		0.3.2		plugin.py				Included pre-heat state when determining
+						Devices.xml				'heatIsOn' state.  Added device states
+												for Rate of Change, Frost Temp and
+												Switching Differential.
+
+081117		0.3.3		plugin.py				Fix bug in v0.3.2 for installations with
+												large numbers of thermostats.
+
+081117		0.3.4		plugin.py				Minor update, not released.
+
+081117		0.3.5		plugin.py				Add code to cope with offline devices,
+												which the hub reports as device type 0.
+
+081117		0.3.6		plugin.py				Removed º symbol in a log entry request
+												because Indigo didn't like it.
+
+091117		0.3.7		plugin.py				Add device state for pre-heat mode.
+						Devices.xml
+
+010318		0.3.8		plugin.py				Change Auto state to allow compatibility
+												with HomeKit.
+
+250718		0.4.0		plugin.py				Add Action to allow change of Neohub IP.
+						Actions.xml
+
+220918		0.4.1		plugin.py				Fix bug where 'Pre-Heat' state was not
+												updated in certain situations.
+
+250918		0.4.2		plugin.py				Remove cool setpoint and fan controls.
+
+130119		0.4.3		plugin.py				Add support for NeoStat-e (Device
+												Type 13).
+
+080219		0.4.4		plugin.py				Remove update checking, per latest Indigo
+												developer guidelines.
+
+100619		0.5.0		plugin.py				Add 30 minute override option.
+						Actions.xml
+
+100120		0.5.1		plugin.py				Ignore device type 14 (sensor).
+
+180422		2022.0.0	plugin.py				Updated for Indigo 2022.1 and later.
+
+170823		2022.1.0	plugin.py				Add Holiday Mode
+						Devices.xml
+						
+201023		2022.1.1	plugin.py				Add code to handle error when retrieving
+												ENGINEERS_DATA.
+
+201023		2022.1.2	plugin.py				Add code to screen for invalid characters
+												in Heatmiser device names when creating
+												devices.
+
+131123		2022.1.3	plugin.py				Add debug code for Engineer's Data.
+
+131123		2023.0.1	plugin.py				Ignore devices with "SUPERSEDED" in name
+
+131223		2023.1.0	plugin.py				Add support for NeoAir thermostats.
+
+280126		2023.2.0	plugin.py				Add support for wireless air sensors
+						Devices.xml				(Device Type 14).
+
+280126		2023.2.1	plugin.py				Fix sensor update issue - skip SUPERSEDED
+												devices in updateReadings().
+
+
+

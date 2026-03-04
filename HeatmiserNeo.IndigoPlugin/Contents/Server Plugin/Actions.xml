@@ -1,0 +1,74 @@
+<?xml version="1.0"?>
+<Actions>
+    <Action id="setOverride" deviceFilter="self.heatmiserNeostat">
+        <Name>Heating Override</Name>
+        <CallbackMethod>setOverride</CallbackMethod>
+		<ConfigUI>
+			<Field id="setOverride" type="label">
+		        <Label>Temporarily overrides the Heatmiser programmed schedule.</Label>
+		    </Field>
+			<Field type="menu" id="numberOfHours" defaultValue="01">
+				<Label>Choose an option:</Label>
+				<List>
+					<Option value="0.5">30 Minutes</Option>
+					<Option value="01">1 Hour</Option>
+					<Option value="02">2 Hours</Option>
+					<Option value="03">3 Hours</Option>
+					<Option value="04">4 Hours</Option>
+					<Option value="05">5 Hours</Option>
+					<Option value="06">6 Hours</Option>
+					<Option value="07">7 Hours</Option>
+					<Option value="08">8 Hours</Option>
+					<Option value="09">9 Hours</Option>
+					<Option value="10">10 Hours</Option>
+					<Option value="15">15 Hours</Option>
+					<Option value="20">20 Hours</Option>
+				</List>
+			</Field>
+			<Field type="menu" id="overrideTemp" defaultValue="20">
+				<Label>Choose an option:</Label>
+				<List>
+					<Option value="10">10 degC</Option>
+					<Option value="15">15 degC</Option>
+					<Option value="16">16 degC</Option>
+					<Option value="17">17 degC</Option>
+					<Option value="18">18 degC</Option>
+					<Option value="19">19 degC</Option>
+					<Option value="20">20 degC</Option>
+					<Option value="21">21 degC</Option>
+					<Option value="22">22 degC</Option>
+					<Option value="23">23 degC</Option>
+					<Option value="24">24 degC</Option>
+					<Option value="25">25 degC</Option>
+				</List>
+			</Field>
+		</ConfigUI>
+    </Action>
+    <Action id="setCool" deviceFilter="self.heatmiserNeostat">
+        <Name>Building Protection</Name>
+        <CallbackMethod>setCool</CallbackMethod>
+		<ConfigUI>
+			<Field id="setCool" type="label">
+		        <Label>Temporarily overrides Heatmiser programmed schedule.</Label>
+		    </Field>
+		</ConfigUI>
+    </Action>
+    <Action id="setAuto" deviceFilter="self.heatmiserNeostat">
+        <Name>Auto Mode</Name>
+        <CallbackMethod>setAuto</CallbackMethod>
+		<ConfigUI>
+			<Field id="setAuto" type="label">
+		        <Label>Reinstates Heatmiser programmed schedule.</Label>
+		    </Field>
+		</ConfigUI>
+    </Action>
+    <Action id="changeIp">
+        <Name>Change Neohub IP address</Name>
+        <CallbackMethod>changeIp</CallbackMethod>
+        <ConfigUI>
+            <Field id="newIp" type="textfield">
+                <Label>New IP</Label>
+            </Field>
+        </ConfigUI>
+    </Action>
+</Actions>

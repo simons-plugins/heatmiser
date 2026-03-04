@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<PluginConfig>
+	<Field id="topLabel" type="label" fontSize="small" fontColor="darkgray">
+		<Label>Enter Neohub IP address</Label>
+	</Field>
+	<Field id="neohubIP" type="textfield" defaultValue="192.168.0.1">
+		<Label>Neohub IP address:</Label>
+	</Field>
+	<Field id="sep1" type="separator"/>
+	<Field id="timeSync" type="checkbox" defaultValue="false" tooltip="Check to synchronise Neo time with Indigo once per day">
+		<Label>Synchronise Neo time with Indigo: </Label>
+	</Field>
+	<Field id="sep2" type="separator"/>
+	<Field id="logComms" type="checkbox" defaultValue="false" tooltip="Check to copy Neo comms to Indigo Event Log">
+		<Label>Copy Neo comms to Indigo Event Log: </Label>
+	</Field>
+</PluginConfig>
