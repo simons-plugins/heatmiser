@@ -44,7 +44,7 @@
 			</Field>
 		</ConfigUI>
     </Action>
-    <Action id="setCool" deviceFilter="self.heatmiserNeostat">
+    <Action id="setCool" deviceFilter="self">
         <Name>Building Protection</Name>
         <CallbackMethod>setCool</CallbackMethod>
 		<ConfigUI>
@@ -53,7 +53,7 @@
 		    </Field>
 		</ConfigUI>
     </Action>
-    <Action id="setAuto" deviceFilter="self.heatmiserNeostat">
+    <Action id="setAuto" deviceFilter="self">
         <Name>Auto Mode</Name>
         <CallbackMethod>setAuto</CallbackMethod>
 		<ConfigUI>
@@ -62,12 +62,65 @@
 		    </Field>
 		</ConfigUI>
     </Action>
+    <Action id="timerBoost" deviceFilter="self.heatmiserNeoTimeclock">
+        <Name>Timer Boost (On/Off devices)</Name>
+        <CallbackMethod>timerBoost</CallbackMethod>
+        <ConfigUI>
+            <Field id="timerBoostLabel" type="label">
+                <Label>Boosts a timeclock device (e.g. hot water) on for a set duration. No temperature — just on/off.</Label>
+            </Field>
+            <Field type="menu" id="boostMinutes" defaultValue="30">
+                <Label>Boost duration:</Label>
+                <List>
+                    <Option value="15">15 Minutes</Option>
+                    <Option value="30">30 Minutes</Option>
+                    <Option value="60">1 Hour</Option>
+                    <Option value="120">2 Hours</Option>
+                    <Option value="180">3 Hours</Option>
+                    <Option value="240">4 Hours</Option>
+                </List>
+            </Field>
+        </ConfigUI>
+    </Action>
+    <Action id="timerBoostOff" deviceFilter="self.heatmiserNeoTimeclock">
+        <Name>Cancel Timer Boost</Name>
+        <CallbackMethod>timerBoostOff</CallbackMethod>
+        <ConfigUI>
+            <Field id="timerBoostOffLabel" type="label">
+                <Label>Cancels a timer boost and returns to schedule.</Label>
+            </Field>
+        </ConfigUI>
+    </Action>
     <Action id="changeIp">
         <Name>Change Neohub IP address</Name>
         <CallbackMethod>changeIp</CallbackMethod>
         <ConfigUI>
             <Field id="newIp" type="textfield">
                 <Label>New IP</Label>
+            </Field>
+        </ConfigUI>
+    </Action>
+    <Action id="setHoliday">
+        <Name>Set Holiday Mode</Name>
+        <CallbackMethod>setHoliday</CallbackMethod>
+        <ConfigUI>
+            <Field id="setHolidayLabel" type="label">
+                <Label>Sets all devices to holiday/standby until end date.</Label>
+            </Field>
+            <Field type="textfield" id="holidayEndDate" defaultValue="">
+                <Label>End date (DD/MM/YYYY)</Label>
+            </Field>
+            <Field type="textfield" id="holidayEndTime" defaultValue="12:00">
+                <Label>End time (HH:MM)</Label>
+            </Field>
+        </ConfigUI>
+    </Action>
+    <Action id="cancelHoliday">
+        <Name>Cancel Holiday</Name>
+        <CallbackMethod>cancelHoliday</CallbackMethod>
+        <ConfigUI>
+            <Field id="cancelHolidayLabel" type="label">
+                <Label>Cancels holiday mode. All devices revert to schedules.</Label>
             </Field>
         </ConfigUI>
     </Action>
