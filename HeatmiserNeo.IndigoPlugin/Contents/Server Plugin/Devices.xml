@@ -1,0 +1,121 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+	Devices
+	Created by Alan Carter
+	Copyright (c) 2016-2017
+	All rights reserved
+-->
+
+<Devices>
+	<Device type="relay" id="heatmiserNeoplug" allowUserCreation="false">
+		<Name>Heatmiser Neoplug</Name>
+		<States>
+			<State id="onOffState">
+				<ValueType>Boolean</ValueType>
+				<TriggerLabel>Neoplug On</TriggerLabel>
+				<ControlPageLabel>Neoplug Status</ControlPageLabel>
+			</State>
+		</States>
+	</Device>
+	<Device type="thermostat" id="heatmiserNeostat" allowUserCreation="false">
+		<Name>Heatmiser Neo Thermostat</Name>
+		<States>
+			<State id="heatIsOn">
+				<ValueType>Boolean</ValueType>
+				<TriggerLabel>Neostat Heating On</TriggerLabel>
+				<ControlPageLabel>Neostat Heating Status</ControlPageLabel>
+			</State>
+			<State id="preHeat">
+				<ValueType>Boolean</ValueType>
+				<TriggerLabel>Neostat Pre-Heat On</TriggerLabel>
+				<ControlPageLabel>Neostat Pre-Heat Status</ControlPageLabel>
+			</State>
+			<State id="HubFirmwareVersion">
+				<ValueType>String</ValueType>
+				<TriggerLabel>Neohub Firmware Version</TriggerLabel>
+				<ControlPageLabel>Neohub Firmware Version</ControlPageLabel>
+			</State>
+			<State id="DST_Auto">
+				<ValueType>String</ValueType>
+				<TriggerLabel>DST Auto</TriggerLabel>
+				<ControlPageLabel>DST Auto</ControlPageLabel>
+			</State>
+			<State id="DST_On">
+				<ValueType>String</ValueType>
+				<TriggerLabel>DST Active</TriggerLabel>
+				<ControlPageLabel>DST Active</ControlPageLabel>
+			</State>
+			<State id="NTP_Status">
+				<ValueType>String</ValueType>
+				<TriggerLabel>NTP Status</TriggerLabel>
+				<ControlPageLabel>NTP Status</ControlPageLabel>
+			</State>
+			<State id="Holiday">
+				<ValueType>String</ValueType>
+				<TriggerLabel>Holiday Mode</TriggerLabel>
+				<ControlPageLabel>Holiday Mode</ControlPageLabel>
+			</State>
+			<State id="Holiday_Days">
+				<ValueType>String</ValueType>
+				<TriggerLabel>Holiday Days Remaining</TriggerLabel>
+				<ControlPageLabel>Holiday Days Remaining</ControlPageLabel>
+			</State>
+			<State id="Prog_Format">
+				<ValueType>String</ValueType>
+				<TriggerLabel>Programme Format</TriggerLabel>
+				<ControlPageLabel>Programme Format</ControlPageLabel>
+			</State>
+			<State id="Units">
+				<ValueType>String</ValueType>
+				<TriggerLabel>Temperature units (degC or degF)</TriggerLabel>
+				<ControlPageLabel>Temperature units (degC or degF)</ControlPageLabel>
+			</State>
+			<State id="Away">
+				<ValueType>String</ValueType>
+				<TriggerLabel>User has set Away mode</TriggerLabel>
+				<ControlPageLabel>User has set Away mode</ControlPageLabel>
+			</State>
+			<State id="ROC">
+				<ValueType>String</ValueType>
+				<TriggerLabel>Rate of Change (min per deg)</TriggerLabel>
+				<ControlPageLabel>Rate of Change (min per deg)</ControlPageLabel>
+			</State>
+			<State id="FrostTemp">
+				<ValueType>String</ValueType>
+				<TriggerLabel>Frost Temperature</TriggerLabel>
+				<ControlPageLabel>Frost Temperature</ControlPageLabel>
+			</State>
+			<State id="ShortMode">
+				<ValueType>String</ValueType>
+				<TriggerLabel>Short Mode</TriggerLabel>
+				<ControlPageLabel>Short Mode</ControlPageLabel>
+			</State>
+			<State id="SwitchDiff">
+				<ValueType>String</ValueType>
+				<TriggerLabel>Switching Differential (deg)</TriggerLabel>
+				<ControlPageLabel>Switching Differential (deg)</ControlPageLabel>
+			</State>
+		</States>
+	</Device>
+	<Device type="custom" id="heatmiserNeoSensor" allowUserCreation="false">
+		<Name>Heatmiser Neo Sensor</Name>
+		<UiDisplayStateId>temperatureInput1</UiDisplayStateId>
+		<States>
+			<State id="temperatureInput1">
+				<ValueType>Number</ValueType>
+				<TriggerLabel>Temperature</TriggerLabel>
+				<ControlPageLabel>Temperature</ControlPageLabel>
+			</State>
+			<State id="sensorValid">
+				<ValueType>Boolean</ValueType>
+				<TriggerLabel>Sensor Valid</TriggerLabel>
+				<ControlPageLabel>Sensor Status</ControlPageLabel>
+			</State>
+			<State id="lowBattery">
+				<ValueType>Boolean</ValueType>
+				<TriggerLabel>Low Battery</TriggerLabel>
+				<ControlPageLabel>Battery Status</ControlPageLabel>
+			</State>
+		</States>
+	</Device>
+</Devices>
