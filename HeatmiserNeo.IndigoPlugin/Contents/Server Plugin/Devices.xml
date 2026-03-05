@@ -51,7 +51,7 @@
 				<ControlPageLabel>NTP Status</ControlPageLabel>
 			</State>
 			<State id="Holiday">
-				<ValueType>String</ValueType>
+				<ValueType>Boolean</ValueType>
 				<TriggerLabel>Holiday Mode</TriggerLabel>
 				<ControlPageLabel>Holiday Mode</ControlPageLabel>
 			</State>
@@ -71,7 +71,7 @@
 				<ControlPageLabel>Temperature units (degC or degF)</ControlPageLabel>
 			</State>
 			<State id="Away">
-				<ValueType>String</ValueType>
+				<ValueType>Boolean</ValueType>
 				<TriggerLabel>User has set Away mode</TriggerLabel>
 				<ControlPageLabel>User has set Away mode</ControlPageLabel>
 			</State>
@@ -116,12 +116,12 @@
 				<ControlPageLabel>Short Mode</ControlPageLabel>
 			</State>
 			<State id="Holiday">
-				<ValueType>String</ValueType>
+				<ValueType>Boolean</ValueType>
 				<TriggerLabel>Holiday Mode</TriggerLabel>
 				<ControlPageLabel>Holiday Mode</ControlPageLabel>
 			</State>
 			<State id="Away">
-				<ValueType>String</ValueType>
+				<ValueType>Boolean</ValueType>
 				<TriggerLabel>Away Mode</TriggerLabel>
 				<ControlPageLabel>Away Mode</ControlPageLabel>
 			</State>

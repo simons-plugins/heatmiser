@@ -113,9 +113,9 @@ Each phase is a single commit. Phases are ordered to avoid conflicts and build o
 | 6.1 | - | CLAUDE.md | Update to reflect WSS support, new actions, API changes |
 | 6.2 | - | CLAUDE.md | Update communication protocol section (WSS + legacy) |
 | 6.3 | - | CLAUDE.md | Update available actions table |
-| 6.4 | - | CLAUDE.md | Update version to 2025.2.0 |
+| 6.4 | - | CLAUDE.md | Update version to 2026.0.1 |
 
-**Commit message**: `Update documentation for v2025.2.0`
+**Commit message**: `Update documentation for v2026.0.1`
 
 ---
 
@@ -126,4 +126,4 @@ Each phase is a single commit. Phases are ordered to avoid conflicts and build o
 - **Phase 4** is the riskiest change - consider a feature branch
 - **Phase 5** is independent of Phase 4 (works on either TCP or WSS)
 - Close GitHub issues as each phase completes
-- Update Info.plist version after Phase 5: `2025.2.0`
+- Update Info.plist version after Phase 5: `2026.0.1`
