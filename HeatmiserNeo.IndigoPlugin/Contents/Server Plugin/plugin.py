@@ -7,15 +7,10 @@
 ################################################################################
 # Imports
 ################################################################################
-import sys
-import os
 import re
-import http.client
-import urllib
 import json
 import socket
 import datetime
-import errno
 
 ################################################################################
 # Globals
@@ -33,13 +28,20 @@ class Plugin(indigo.PluginBase):
     ########################################
     # Class properties
     ########################################
-    
+
+    @staticmethod
+    def _coerce_bool(value):
+        if isinstance(value, bool):
+            return value
+        return str(value).lower() in ("true", "1", "yes")
+
     ########################################
-    def __init__(self, pluginId, pluginDisplayName, pluginVersion, pluginPrefs): 
-        indigo.PluginBase.__init__(self, pluginId, pluginDisplayName, pluginVersion, pluginPrefs)
+    def __init__(self, pluginId, pluginDisplayName, pluginVersion, pluginPrefs, **kwargs):
+        super().__init__(pluginId, pluginDisplayName, pluginVersion, pluginPrefs, **kwargs)
         self.neohubIP = pluginPrefs.get("neohubIP", "127.0.0.1")
-        self.logComms = pluginPrefs.get("logComms", False)
-        self.timeSync = pluginPrefs.get("timeSync", False)
+        self.logComms = self._coerce_bool(pluginPrefs.get("logComms", False))
+        self.timeSync = self._coerce_bool(pluginPrefs.get("timeSync", False))
+        self.neohubGen2 = self._coerce_bool(pluginPrefs.get("neohubGen2", True))
         self.commsEnabled = True
         self.connectErrorCount = 0
         self.sendErrorCount = 0
@@ -48,26 +50,26 @@ class Plugin(indigo.PluginBase):
         self.dcbUpdateRequired = None
         self.engUpdateRequired = None
         self.firstTime = True
+        self.responseKeysLogged = False
 
-    
-    ########################################
-    def __del__(self):
-        indigo.PluginBase.__del__(self)
 
-        
     ########################################
     def startup(self):
-        indigo.server.log("Starting Heatmiser Neo plugin")
-        if self.logComms:
-            indigo.server.log("Neo comms logging is on")
+        self.logger.info("Starting Heatmiser Neo plugin")
+        if self.neohubGen2:
+            self.logger.info("Using NeoHub Gen 2 API")
         else:
-            indigo.server.log("Neo comms logging is off")   
+            self.logger.info("Using NeoHub Gen 1 (legacy) API")
+        if self.logComms:
+            self.logger.info("Neo comms logging is on")
+        else:
+            self.logger.info("Neo comms logging is off")
         self.createDevices()
         if self.timeSync:
             self.timeUpdateRequired = True
-            indigo.server.log("Neo time will be synchronised daily with Indigo")
+            self.logger.info("Neo time will be synchronised daily with Indigo")
         else:
-            indigo.server.log("Neo time will be syncronised via NTP server")
+            self.logger.info("Neo time will be syncronised via NTP server")
 
 
     def deviceStartComm(self, dev):
@@ -75,17 +77,19 @@ class Plugin(indigo.PluginBase):
         return
 
     def shutdown(self):
-        indigo.server.log("Stopping Heatmiser Neo plugin")
+        self.logger.info("Stopping Heatmiser Neo plugin")
         self.commsEnabled = False
-        pass
 
         
     ########################################
     def runConcurrentThread(self):
-        indigo.server.log("Starting Heatmiser Neo monitoring thread")
+        self.logger.info("Starting Heatmiser Neo monitoring thread")
         try:
             while True:
-                self.updateReadings()
+                try:
+                    self.updateReadings()
+                except Exception as exc:
+                    self.logger.exception("Error in updateReadings")
                 self.sleep(1)
                 if self.firstTime:
                     if self.timeSync:
@@ -93,8 +97,14 @@ class Plugin(indigo.PluginBase):
                     else:
                         self.ntpOn()
                     self.sleep(1)
-                    self.updateDCB()
-                    self.updateEng()
+                    try:
+                        self.updateDCB()
+                    except Exception as exc:
+                        self.logger.exception("Error in updateDCB")
+                    try:
+                        self.updateEng()
+                    except Exception as exc:
+                        self.logger.exception("Error in updateEng")
                     self.firstTime = False
                 else:
                     self.checkDCB()
@@ -115,27 +125,28 @@ class Plugin(indigo.PluginBase):
         # If the user saved preferences, update logging parameters
         if userCancelled == False:
             self.oldLogValue = self.logComms
-            self.logComms = valuesDict.get("logComms", False)
+            self.logComms = self._coerce_bool(valuesDict.get("logComms", False))
             if self.logComms != self.oldLogValue:
                 if self.logComms:
-                    indigo.server.log("Neo comms logging is on")
+                    self.logger.info("Neo comms logging is on")
                 else:
-                    indigo.server.log("Neo comms logging is off")
+                    self.logger.info("Neo comms logging is off")
             self.oldTimeValue = self.timeSync
-            self.timeSync = valuesDict.get("timeSync", False)
+            self.timeSync = self._coerce_bool(valuesDict.get("timeSync", False))
             if self.timeSync != self.oldTimeValue:
                 if self.timeSync:
                     self.ntpOff()
                     self.timeUpdateRequired = True
-                    indigo.server.log("Neo time will be synchronised daily with Indigo")
+                    self.logger.info("Neo time will be synchronised daily with Indigo")
                 else:
                     self.ntpOn()
-                    indigo.server.log("Neo time will be syncronised via NTP server")                
+                    self.logger.info("Neo time will be syncronised via NTP server")
                 self.updateDCB()
+            self.neohubGen2 = self._coerce_bool(valuesDict.get("neohubGen2", True))
             oldIP = self.neohubIP
             self.neohubIP = valuesDict.get("neohubIP")
             if self.neohubIP != oldIP:
-                indigo.server.log("Neohub IP address is now %s" % self.neohubIP)
+                self.logger.info("Neohub IP address is now %s" % self.neohubIP)
 
                         
     ########################################
@@ -143,14 +154,28 @@ class Plugin(indigo.PluginBase):
     
     def createDevices(self):
         self.commsEnabled = True
-        neoInfo = self.getNeoData("\"INFO\":0")
+        deviceTypeMap = {}
+        if self.neohubGen2:
+            # GET_ENGINEERS provides DEVICE_TYPE per device (keyed by name)
+            engData = self.getNeoData("\"GET_ENGINEERS\":0")
+            if engData and engData != "":
+                for devName, devInfo in engData.items():
+                    if isinstance(devInfo, dict) and "DEVICE_TYPE" in devInfo:
+                        deviceTypeMap[devName] = devInfo["DEVICE_TYPE"]
+                if not deviceTypeMap:
+                    self.logger.warning("GET_ENGINEERS returned no device type data; keys: %s" % list(engData.keys())[:5])
+
+        neoInfo = self.getNeoData("\"GET_LIVE_DATA\":0" if self.neohubGen2 else "\"INFO\":0")
         try:
             max_devices = len(neoInfo["devices"])
-        except:
-            indigo.server.log("Cannot detect devices", isError=True)
+        except Exception:
+            self.logger.error("Cannot detect devices")
             max_devices = 0
         for stat in range(0, max_devices):
-            if neoInfo["devices"][stat]["DEVICE_TYPE"] == 14:
+            devData = neoInfo["devices"][stat]
+            devName = devData.get("ZONE_NAME", devData.get("device", "unknown"))
+            deviceType = deviceTypeMap.get(devName, devData.get("DEVICE_TYPE", 0)) if self.neohubGen2 else devData.get("DEVICE_TYPE", 0)
+            if deviceType == 14:
                 # This is a wireless air sensor
                 device = None
                 for dev in indigo.devices.iter("self"):
@@ -159,66 +184,79 @@ class Plugin(indigo.PluginBase):
                             device = dev
                             # Check if existing device has correct type
                             if device.deviceTypeId != "heatmiserNeoSensor":
-                                indigo.server.log("Upgrading sensor device %s to new device type" % device.name)
+                                self.logger.info("Upgrading sensor device %s to new device type" % device.name)
                                 # Rename old device
                                 device.name = device.name + " SUPERSEDED"
                                 device.replaceOnServer()
                                 device = None
                 if device == None:
-                    statName = neoInfo["devices"][stat]["device"]
-                    indigo.server.log("Creating Heatmiser sensor device for %s" % neoInfo["devices"][stat]["device"])
+                    self.logger.info("Creating Heatmiser sensor device for %s" % devName)
                     device = indigo.device.create(protocol=indigo.kProtocol.Plugin,
                     address=stat,
-                    name=neoInfo["devices"][stat]["device"],
+                    name=devName,
                     pluginId="com.racarter.indigoplugin.heatmiser-neo",
                     deviceTypeId="heatmiserNeoSensor",
-                    props={})
+                    props={"neoDeviceType": str(deviceType)})
+                else:
+                    # Ensure device type is stored in pluginProps
+                    localPropsCopy = device.pluginProps
+                    if str(localPropsCopy.get("neoDeviceType", "")) != str(deviceType):
+                        localPropsCopy["neoDeviceType"] = str(deviceType)
+                        device.replacePluginPropsOnServer(localPropsCopy)
                 self.updateStatState(neoInfo, stat, device)
                 continue
+            isTimeclock = devData.get("TIMECLOCK", False)
+            if deviceType == 6:
+                expectedTypeId = "heatmiserNeoplug"
+            elif isTimeclock:
+                expectedTypeId = "heatmiserNeoTimeclock"
+            else:
+                expectedTypeId = "heatmiserNeostat"
             device = None
             for dev in indigo.devices.iter("self"):
                 if "SUPERSEDED" not in dev.name:
                     if int(dev.address) == stat:
-                        device = dev
+                        if dev.deviceTypeId == expectedTypeId:
+                            device = dev
+                        else:
+                            # Wrong device type — supersede and recreate
+                            self.logger.info("Upgrading %s from %s to %s" % (dev.name, dev.deviceTypeId, expectedTypeId))
+                            dev.name = dev.name + " SUPERSEDED"
+                            dev.replaceOnServer()
             if device == None:
-                statName = neoInfo["devices"][stat]["device"]
-                if statName.isidentifier() == False:
-                    indigo.server.log("%s: name contains characters not allowed in Python variable names; please rename this device and restart the plugin" % statName, isError=True)
-                if neoInfo["devices"][stat]["DEVICE_TYPE"] == 6:
-                    indigo.server.log("Creating Heatmiser device for %s" % neoInfo["devices"][stat]["device"])
-                    device = indigo.device.create(protocol=indigo.kProtocol.Plugin,
+                self.logger.info("Creating Heatmiser device for %s (type: %s)" % (devName, expectedTypeId))
+                device = indigo.device.create(protocol=indigo.kProtocol.Plugin,
                     address=stat,
-                    name=neoInfo["devices"][stat]["device"],  
+                    name=devName,
                     pluginId="com.racarter.indigoplugin.heatmiser-neo",
-                    deviceTypeId="heatmiserNeoplug",
-                    props={})
-                else:
-                    indigo.server.log("Creating Heatmiser device for %s" % neoInfo["devices"][stat]["device"])
-                    device = indigo.device.create(protocol=indigo.kProtocol.Plugin,
-                    address=stat,
-                    name=neoInfo["devices"][stat]["device"],  
-                    pluginId="com.racarter.indigoplugin.heatmiser-neo",
-                    deviceTypeId="heatmiserNeostat",
-                    props={})
-            if neoInfo["devices"][stat]["DEVICE_TYPE"] != 6:
-                localPropsCopy = device.pluginProps
-                localPropsCopy.update({"SupportsCoolSetpoint":False})
-                localPropsCopy.update({"SupportsHvacFanMode":False})
-                device.replacePluginPropsOnServer(localPropsCopy)                    
+                    deviceTypeId=expectedTypeId,
+                    props={"neoDeviceType": str(deviceType)})
+            # Store device type and thermostat props
+            localPropsCopy = device.pluginProps
+            localPropsCopy["neoDeviceType"] = str(deviceType)
+            if expectedTypeId == "heatmiserNeostat":
+                localPropsCopy["SupportsCoolSetpoint"] = False
+                localPropsCopy["SupportsHvacFanMode"] = False
+            device.replacePluginPropsOnServer(localPropsCopy)
             self.updateStatState(neoInfo, stat, device)
 
         
     def updateReadings(self):
-        update = self.getNeoData("\"INFO\":0")
+        update = self.getNeoData("\"GET_LIVE_DATA\":0" if self.neohubGen2 else "\"INFO\":0")
         if update != "":
+            # Log response keys once on first successful response for field name verification
+            if not self.responseKeysLogged and update.get("devices"):
+                self.logger.info("GET_LIVE_DATA top-level keys: %s" % list(update.keys()))
+                self.logger.info("GET_LIVE_DATA first device keys: %s" % list(update["devices"][0].keys()))
+                self.responseKeysLogged = True
             max_devices = len(update["devices"])
             for stat in range(0, max_devices):
                 device = None
-                neoDeviceType = update["devices"][stat]["DEVICE_TYPE"]
                 for dev in indigo.devices.iter("self"):
                     if "SUPERSEDED" not in dev.name:
                         if int(dev.address) == stat:
-                            # Match device type: sensor (14) should be heatmiserNeoSensor, others should be thermostat/plug
+                            # Match by Indigo device type (sensor vs thermostat/plug)
+                            neoDeviceType = int(dev.pluginProps.get("neoDeviceType", 0))
                             if neoDeviceType == 14 and dev.deviceTypeId == "heatmiserNeoSensor":
                                 device = dev
                                 break
@@ -229,161 +267,215 @@ class Plugin(indigo.PluginBase):
                     self.updateStatState(update, stat, device)
                     if stat == 0:
                         self.neoDevice = device
+            # Update Holiday_End from top-level response on first device
+            if self.neoDevice is not None:
+                holidayEnd = update.get("HOLIDAY_END", 0)
+                if holidayEnd and holidayEnd > 0:
+                    endDate = datetime.datetime.fromtimestamp(holidayEnd).strftime("%d/%m/%Y %H:%M")
+                else:
+                    endDate = "None"
+                self.neoDevice.updateStateOnServer(key="Holiday_End", value=endDate)
     
             
     def updateStatState(self, neoRep, index, indigoDevice):
-            deviceType = neoRep["devices"][index]["DEVICE_TYPE"]
-            if deviceType in (1, 7, 12, 13, 24):
-                # This device is a Neostat (1) or NeoAir (7) or NeoStat-e (12) or NeoAir (13) or NeoStat V2 (24)
-                # Check if device is offline first
-                if neoRep["devices"][index]["OFFLINE"]:
-                    indigoDevice.setErrorStateOnServer('OFFLINE')
-                    return
+        devData = neoRep["devices"][index]
+        # Read device type from pluginProps (stored during createDevices)
+        deviceType = int(indigoDevice.pluginProps.get("neoDeviceType", devData.get("DEVICE_TYPE", 0)))
 
-                if neoRep["devices"][index]["HEATING"] or neoRep["devices"][index]["PREHEAT"] or neoRep["devices"][index]["TIMER"]:
-                    # HEATING for Thermostats, TIMER for Timeclocks
-                    indigoDevice.updateStateOnServer(key="heatIsOn", value=True)
-                    indigoDevice.updateStateImageOnServer(indigo.kStateImageSel.HvacHeating)
-                else:
-                    indigoDevice.updateStateOnServer(key="heatIsOn", value=False)
-                    indigoDevice.updateStateImageOnServer(indigo.kStateImageSel.HvacHeatMode)
-                indigoDevice.updateStateOnServer(key="preHeat", value=neoRep["devices"][index]["PREHEAT"])
-                indigoDevice.updateStateOnServer(key="setpointHeat", value=neoRep["devices"][index]["CURRENT_SET_TEMPERATURE"])
-                curTemp = uiValue=neoRep["devices"][index]["CURRENT_TEMPERATURE"]
-                curTempf = float(curTemp)
-                curTempr = round(curTempf, 1)
-                if curTempr > 0:
-                    indigoDevice.updateStateOnServer(key="temperatureInput1", value=curTempr, uiValue=str(curTempr)+" °C", clearErrorState=True)
-                else:
-                    # Only log error if not offline (offline already handled above)
-                    indigo.server.log("Neo temperature error for %s" % indigoDevice.name, isError=True)
-                frost = neoRep["devices"][index]["STANDBY"]
-                tempHold = neoRep["devices"][index]["TEMP_HOLD"]
-                if frost:
-                    indigoDevice.updateStateOnServer(key="hvacOperationMode", value=indigo.kHvacMode.Cool)
-                    indigoDevice.updateStateOnServer(key="ShortMode", value="Frost")
-                elif tempHold:
-                    indigoDevice.updateStateOnServer(key="hvacOperationMode", value=indigo.kHvacMode.Heat)
-                    indigoDevice.updateStateOnServer(key="ShortMode", value="Boost")
-                else:
-                    indigoDevice.updateStateOnServer(key="hvacOperationMode", value=indigo.kHvacMode.ProgramHeat)
-                    indigoDevice.updateStateOnServer(key="ShortMode", value="Auto")
-                indigoDevice.updateStateOnServer(key="Away", value=neoRep["devices"][index]["AWAY"])
-                indigoDevice.updateStateOnServer(key="Holiday", value=neoRep["devices"][index]["HOLIDAY"])
-                indigoDevice.updateStateOnServer(key="Holiday_Days", value=neoRep["devices"][index]["HOLIDAY_DAYS"])
-                
-            elif deviceType == 6:
-                # This device is a Neoplug
-                if neoRep["devices"][index]["TIMER"]:
-                    indigoDevice.updateStateOnServer(key="onOffState", value=True, clearErrorState=True)
-                    indigoDevice.updateStateImageOnServer(indigo.kStateImageSel.PowerOn)
-                else:
-                    indigoDevice.updateStateOnServer(key="onOffState", value=False, clearErrorState=True)
-                    indigoDevice.updateStateImageOnServer(indigo.kStateImageSel.PowerOff)
-                    
-            elif deviceType == 0:
-                # This device is offline
+        if indigoDevice.deviceTypeId == "heatmiserNeoTimeclock":
+            # Timeclock device (e.g. hot water, towel rails) — on/off with temperature
+            if devData.get("OFFLINE", False):
                 indigoDevice.setErrorStateOnServer('OFFLINE')
-                
-            elif deviceType == 14:
-                # This device is a wireless air sensor
-                # Update battery status regardless of online/offline state
-                indigoDevice.updateStateOnServer(key="lowBattery", value=neoRep["devices"][index]["LOW_BATTERY"])
-
-                if neoRep["devices"][index]["OFFLINE"]:
-                    indigoDevice.updateStateOnServer(key="sensorValid", value=False)
-                    indigoDevice.updateStateOnServer(key="temperatureInput1", value=0, uiValue="offline")
-                    indigoDevice.updateStateImageOnServer(indigo.kStateImageSel.SensorOff)
-                    return
-
-                # Device is online, process temperature
-                curTemp = neoRep["devices"][index]["CURRENT_TEMPERATURE"]
-                curTempf = float(curTemp)
-                curTempr = round(curTempf, 1)
-
-                if curTempr > 0:
-                    indigoDevice.updateStateOnServer(key="temperatureInput1", value=curTempr, uiValue=str(curTempr)+" °C", clearErrorState=True)
-                    indigoDevice.updateStateOnServer(key="sensorValid", value=True)
-                else:
-                    indigoDevice.setErrorStateOnServer('INVALID TEMPERATURE')
-                    indigoDevice.updateStateOnServer(key="sensorValid", value=False)
-
+                return
+            timerOn = devData.get("TIMER_ON", devData.get("TIMER", False))
+            curTemp = round(float(devData.get("ACTUAL_TEMP", devData.get("CURRENT_TEMPERATURE", 0))), 1)
+            frost = devData.get("STANDBY", False)
+            holdOn = devData.get("HOLD_ON", devData.get("TEMP_HOLD", False))
+            if frost:
+                shortMode = "Frost"
+            elif holdOn:
+                shortMode = "Boost"
             else:
-                indigo.server.log("updateStatState: Unknown device type '"+str(deviceType)+"'", isError=True)   
+                shortMode = "Auto"
+            stateList = [
+                {"key": "onOffState", "value": timerOn},
+                {"key": "ShortMode", "value": shortMode},
+                {"key": "Away", "value": devData.get("AWAY", False)},
+                {"key": "Holiday", "value": devData.get("HOLIDAY", False)},
+            ]
+            if curTemp > 0:
+                stateList.append({"key": "temperatureInput1", "value": curTemp, "uiValue": "%s °C" % curTemp, "clearErrorState": True})
+            indigoDevice.updateStatesOnServer(stateList)
+            if timerOn:
+                indigoDevice.updateStateImageOnServer(indigo.kStateImageSel.PowerOn)
+            else:
+                indigoDevice.updateStateImageOnServer(indigo.kStateImageSel.PowerOff)
+
+        elif deviceType in (1, 7, 12, 13, 24):
+            # Neostat (1), NeoAir (7), NeoStat-e (12), NeoAir (13), NeoStat V2 (24)
+            if devData.get("OFFLINE", False):
+                indigoDevice.setErrorStateOnServer('OFFLINE')
+                return
+
+            heating = devData.get("HEAT_ON", devData.get("HEATING", False))
+            preHeat = devData.get("PREHEAT_ACTIVE", devData.get("PREHEAT", False))
+            timerOn = devData.get("TIMER_ON", devData.get("TIMER", False))
+            heatIsOn = heating or preHeat or timerOn
+            curTemp = round(float(devData.get("ACTUAL_TEMP", devData.get("CURRENT_TEMPERATURE", 0))), 1)
+
+            frost = devData.get("STANDBY", False)
+            tempHold = devData.get("HOLD_ON", devData.get("TEMP_HOLD", False))
+            if frost:
+                hvacMode = indigo.kHvacMode.Cool
+                shortMode = "Frost"
+            elif tempHold:
+                hvacMode = indigo.kHvacMode.Heat
+                shortMode = "Boost"
+            else:
+                hvacMode = indigo.kHvacMode.ProgramHeat
+                shortMode = "Auto"
+
+            stateList = [
+                {"key": "heatIsOn", "value": heatIsOn},
+                {"key": "preHeat", "value": preHeat},
+                {"key": "setpointHeat", "value": devData.get("SET_TEMP", devData.get("CURRENT_SET_TEMPERATURE", 0))},
+                {"key": "hvacOperationMode", "value": hvacMode},
+                {"key": "ShortMode", "value": shortMode},
+                {"key": "Away", "value": devData.get("AWAY", False)},
+                {"key": "Holiday", "value": devData.get("HOLIDAY", False)},
+            ]
+
+            if curTemp > 0:
+                stateList.append({"key": "temperatureInput1", "value": curTemp, "uiValue": "%s °C" % curTemp, "clearErrorState": True})
+            else:
+                self.logger.error("Neo temperature error for %s" % indigoDevice.name)
+
+            indigoDevice.updateStatesOnServer(stateList)
+
+            if heatIsOn:
+                indigoDevice.updateStateImageOnServer(indigo.kStateImageSel.HvacHeating)
+            else:
+                indigoDevice.updateStateImageOnServer(indigo.kStateImageSel.HvacHeatMode)
+
+        elif deviceType == 6:
+            # Neoplug
+            timerOn = devData.get("TIMER_ON", devData.get("TIMER", False))
+            indigoDevice.updateStateOnServer(key="onOffState", value=timerOn, clearErrorState=True)
+            if timerOn:
+                indigoDevice.updateStateImageOnServer(indigo.kStateImageSel.PowerOn)
+            else:
+                indigoDevice.updateStateImageOnServer(indigo.kStateImageSel.PowerOff)
+
+        elif deviceType == 0:
+            indigoDevice.setErrorStateOnServer('OFFLINE')
+
+        elif deviceType == 14:
+            # Wireless air sensor
+            curTemp = round(float(devData.get("ACTUAL_TEMP", devData.get("CURRENT_TEMPERATURE", 0))), 1)
+
+            if devData.get("OFFLINE", False):
+                stateList = [
+                    {"key": "lowBattery", "value": devData.get("LOW_BATTERY", False)},
+                    {"key": "sensorValid", "value": False},
+                    {"key": "temperatureInput1", "value": 0, "uiValue": "offline"},
+                ]
+                indigoDevice.updateStatesOnServer(stateList)
+                indigoDevice.updateStateImageOnServer(indigo.kStateImageSel.SensorOff)
+                return
+
+            stateList = [
+                {"key": "lowBattery", "value": devData.get("LOW_BATTERY", False)},
+            ]
+
+            if curTemp > 0:
+                stateList.append({"key": "temperatureInput1", "value": curTemp, "uiValue": "%s °C" % curTemp, "clearErrorState": True})
+                stateList.append({"key": "sensorValid", "value": True})
+            else:
+                indigoDevice.setErrorStateOnServer('INVALID TEMPERATURE')
+                stateList.append({"key": "sensorValid", "value": False})
+
+            indigoDevice.updateStatesOnServer(stateList)
+
+        else:
+            self.logger.error("updateStatState: Unknown device type '%s'" % deviceType)
 
 
     def getNeoData(self, cmdPhrase):
         if self.commsEnabled:
             tcp_ip = self.neohubIP
             tcp_port = 4242
-            self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.sock.settimeout(8)
-            errorcode = 0
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(8)
             try:
-                self.sock.connect((tcp_ip, tcp_port))
-                self.connectErrorCount = 0
-            except socket.timeout:
-                self.connectErrorCount += 1
-                if (self.connectErrorCount == 3):
-                    indigo.server.log("getNeoData: Socket timeout error", isError=True)
-                return ""
-            except:
-                self.connectErrorCount += 1
-                if (self.connectErrorCount == 3):
-                    indigo.server.log("getNeoData: Socket connect error", isError=True)
-                return ""
-            cmdPhrase = b"{"+bytes(cmdPhrase, 'ascii')+b"}"
-            try:
-                if self.logComms:
-                    indigo.server.log("--> "+str(cmdPhrase))
-                self.sock.send(cmdPhrase+b"\0")
-                dataj = None
-                dataj = self.sock.recv(4096)
-                while ((b"INFO" in cmdPhrase) and (b"}]}" not in dataj[len(dataj)-5:len(dataj)-1])) or ((b"ENGINEERS_DATA" in cmdPhrase) and (b"}}" not in dataj[len(dataj)-4:len(dataj)-1])):  
-                    dataj = dataj + self.sock.recv(4096)
-                self.sendErrorCount = 0
-                if self.logComms:
-                    indigo.server.log("<-- "+str(dataj))
-            except socket.error as v:
-                self.sendErrorCount += 1
-                if (self.sendErrorCount == 3):
-                    indigo.server.log("getNeoData: Socket send error ("+str(v)+")", isError=True)
-                    self.sendErrorCount = 0
-                return ""
-            if dataj != None:
-                datak = re.sub(b'[^\s!-~]', b'', dataj)   #Filter extraneous characters which cause json decode to fail
-                data = json.loads(datak)
-                self.connectErrorCount = 0
-                self.sendErrorCount = 0
-                if "error" in data:
-                    indigo.server.log(str(cmdPhrase), isError=True)
-                    errMsg = data["error"]
-                    indigo.server.log(errMsg, isError=True)
+                try:
+                    sock.connect((tcp_ip, tcp_port))
+                    self.connectErrorCount = 0
+                except socket.timeout:
+                    self.connectErrorCount += 1
+                    if (self.connectErrorCount == 3):
+                        self.logger.error("getNeoData: Socket timeout error")
                     return ""
+                except Exception:
+                    self.connectErrorCount += 1
+                    if (self.connectErrorCount == 3):
+                        self.logger.error("getNeoData: Socket connect error")
+                    return ""
+                cmdPhrase = b"{"+bytes(cmdPhrase, 'ascii')+b"}"
+                try:
+                    if self.logComms:
+                        self.logger.info("--> %s" % cmdPhrase)
+                    sock.send(cmdPhrase+b"\0")
+                    dataj = None
+                    dataj = sock.recv(4096)
+                    while ((b"GET_LIVE_DATA" in cmdPhrase or b"INFO" in cmdPhrase) and (b"}]}" not in dataj[len(dataj)-5:len(dataj)-1])) or ((b"GET_ENGINEERS" in cmdPhrase or b"ENGINEERS_DATA" in cmdPhrase) and (b"}}" not in dataj[len(dataj)-4:len(dataj)-1])):
+                        chunk = sock.recv(4096)
+                        if not chunk:
+                            raise ConnectionError("NeoHub connection closed unexpectedly")
+                        dataj = dataj + chunk
+                    self.sendErrorCount = 0
+                    if self.logComms:
+                        self.logger.info("<-- %s" % dataj)
+                except socket.error as v:
+                    self.sendErrorCount += 1
+                    if (self.sendErrorCount == 3):
+                        self.logger.error("getNeoData: Socket send error (%s)" % v)
+                        self.sendErrorCount = 0
+                    return ""
+                if dataj != None:
+                    datak = re.sub(b'[^\s!-~]', b'', dataj)   #Filter extraneous characters which cause json decode to fail
+                    data = json.loads(datak)
+                    self.connectErrorCount = 0
+                    self.sendErrorCount = 0
+                    if "error" in data:
+                        self.logger.error("Command: %s" % cmdPhrase)
+                        self.logger.error(data["error"])
+                        return ""
+                    else:
+                        return data
                 else:
-                    return data
-            else:
-                return ""
+                    return ""
+            finally:
+                sock.close()
         else:
-            pass
-    
-    
+            return ""
+
+
     def checkTime(self):
         dt = datetime.datetime.now()
         if self.timeUpdateRequired == None:
             self.timeUpdateRequired = True
         if (dt.hour == 3) and self.timeUpdateRequired:
             update = self.getNeoData("\"SET_TIME\":["+str(dt.hour)+", "+str(dt.minute)+"]")
-            if "result" in update:
-                indigo.server.log("Device time synchronised with Indigo")
+            if update and "result" in update:
+                self.logger.info("Device time synchronised with Indigo")
             else:
-                indigo.server.log("Device time sync failed", isError=True)
-                
+                self.logger.error("Device time sync failed")
+
             update = self.getNeoData("\"SET_DATE\":["+str(dt.year)+", "+str(dt.month)+", "+str(dt.day)+"]")
-            if "result" in update:
-                indigo.server.log("Device date synchronised with Indigo")
+            if update and "result" in update:
+                self.logger.info("Device date synchronised with Indigo")
             else:
-                indigo.server.log("Device date sync failed", isError=True)
+                self.logger.error("Device date sync failed")
                 
             self.timeUpdateRequired = False
         elif (dt.hour == 4) and self.timeUpdateRequired == False:
@@ -404,14 +496,16 @@ class Plugin(indigo.PluginBase):
 
             
     def updateDCB(self):
-        update = self.getNeoData("\"READ_DCB\":100")
+        update = self.getNeoData("\"GET_SYSTEM\":0" if self.neohubGen2 else "\"READ_DCB\":100")
         if update != "":
-            self.neoDevice.updateStateOnServer(key="HubFirmwareVersion", value=str(update["Firmware version"]))
-            self.neoDevice.updateStateOnServer(key="DST_Auto", value=str(update["DSTAUTO"]))
-            self.neoDevice.updateStateOnServer(key="DST_On", value=str(update["DSTON"]))
-            self.neoDevice.updateStateOnServer(key="NTP_Status", value=str(update["NTP"]))
-            self.neoDevice.updateStateOnServer(key="Units", value="deg"+str(update["CORF"]))
-            pfi = update["PROGFORMAT"]
+            self.logger.debug("GET_SYSTEM keys: %s" % list(update.keys()))
+        if update != "" and self.neoDevice is not None:
+            self.neoDevice.updateStateOnServer(key="HubFirmwareVersion", value=str(update.get("HUB_VERSION", update.get("Firmware version", "unknown"))))
+            self.neoDevice.updateStateOnServer(key="DST_Auto", value=str(update.get("DST_AUTO", update.get("DSTAUTO", ""))))
+            self.neoDevice.updateStateOnServer(key="DST_On", value=str(update.get("DST_ON", update.get("DSTON", ""))))
+            self.neoDevice.updateStateOnServer(key="NTP_Status", value=str(update.get("NTP_ON", update.get("NTP", ""))))
+            self.neoDevice.updateStateOnServer(key="Units", value="deg"+str(update.get("CORF", "")))
+            pfi = update.get("FORMAT", update.get("PROGFORMAT", 0))
             pfiString = "Unknown"
             if pfi == 0:
                 pfiString = "Non-programmable"
@@ -424,7 +518,7 @@ class Plugin(indigo.PluginBase):
             elif pfi == 4:
                 pfiString = "7day"
             else:
-                pfiString == pfi
+                pfiString = str(pfi)
             self.neoDevice.updateStateOnServer(key="Prog_Format", value=pfiString)
             
 
@@ -441,31 +535,35 @@ class Plugin(indigo.PluginBase):
 
             
     def updateEng(self):
-        stepName = "Get Data"
-        try:
-            update = self.getNeoData("\"ENGINEERS_DATA\":0")
-            if update != "":
-                max_devices = len(update)
-                stepName = "Get Device"
-                for stat in range(0, max_devices):
-                    device = None
-                    for dev in indigo.devices.iter("self"):
-                        if "SUPERSEDED" not in dev.name:
-                            if int(dev.address) == stat:
-                                stepName = "Get ROC"
-                                if update[dev.name]["RATE OF CHANGE"] > 0:
-                                    stepName = "ROC"
-                                    dev.updateStateOnServer(key="ROC", value=update[dev.name]["RATE OF CHANGE"])
-                                    stepName = "Frost Temp"
-                                    dev.updateStateOnServer(key="FrostTemp", value=update[dev.name]["FROST TEMPERATURE"])
-                                    stepName = "Switching Differential"
-                                    swDiff = update[dev.name]["SWITCHING DIFFERENTIAL"]
-                                    if swDiff == 0:
-                                        swDiff = 0.5
-                                    dev.updateStateOnServer(key="SwitchDiff", value=swDiff)
-        except:
-            indigo.server.log("Cannot update ENGINEERS_DATA.  Will try again tomorrow.", isError=True)
-            indigo.server.log("Update failed at step '%s' for %s" % (stepName, dev.name))
+        update = self.getNeoData("\"GET_ENGINEERS\":0" if self.neohubGen2 else "\"ENGINEERS_DATA\":0")
+        if update != "":
+            self.logger.debug("GET_ENGINEERS keys: %s" % list(update.keys())[:10])
+            # Log first device's engineer data keys for field verification
+            for key, val in update.items():
+                if isinstance(val, dict):
+                    self.logger.debug("GET_ENGINEERS device keys: %s" % list(val.keys()))
+                    break
+            for dev in indigo.devices.iter("self"):
+                if "SUPERSEDED" in dev.name:
+                    continue
+                # Skip sensors, neoplugs, and timeclocks — they don't have engineering states
+                if dev.deviceTypeId in ("heatmiserNeoSensor", "heatmiserNeoplug", "heatmiserNeoTimeclock"):
+                    continue
+                if dev.name not in update:
+                    continue
+                try:
+                    devData = update[dev.name]
+                    frostTemp = devData.get("FROST_TEMP", devData.get("FROST TEMPERATURE", None))
+                    if frostTemp is not None:
+                        dev.updateStateOnServer(key="FrostTemp", value=frostTemp)
+                    swDiff = devData.get("SWITCHING DIFFERENTIAL", 0)
+                    if swDiff == 0:
+                        swDiff = 0.5
+                    dev.updateStateOnServer(key="SwitchDiff", value=swDiff)
+                    roc = devData.get("RATE OF CHANGE", "")
+                    dev.updateStateOnServer(key="ROC", value=str(roc))
+                except Exception as exc:
+                    self.logger.exception("Cannot update GET_ENGINEERS for %s" % dev.name)
          
 
     def ntpOn(self):
@@ -480,16 +578,33 @@ class Plugin(indigo.PluginBase):
         update = self.getNeoData("\"DST_OFF\":0")
         
     
-    def fixStatName(self, name):    # Not currently used
-        name = name.replace(' ','+')
-        name = name.replace('/','%2F')
-        return name
-
-
     ########################################
     # Menu Item functions
     ######################
-    
+
+    def discoverNeohub(self):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        sock.settimeout(5)
+        try:
+            sock.sendto(b"hubseek", ("255.255.255.255", 19790))
+            data, addr = sock.recvfrom(1024)
+            response = json.loads(data.decode())
+            foundIp = response.get("ip", "")
+            deviceId = response.get("device_id", "").strip()
+            if foundIp:
+                self.neohubIP = foundIp
+                self.pluginPrefs["neohubIP"] = foundIp
+                self.savePluginPrefs()
+                self.logger.info(f"NeoHub found at {foundIp} (device: {deviceId})")
+            else:
+                self.logger.warning("NeoHub responded but no IP in response")
+        except socket.timeout:
+            self.logger.warning("No NeoHub found on network (timed out)")
+        except Exception as exc:
+            self.logger.error(f"HubSeek error: {exc}")
+        finally:
+            sock.close()
 
 
 
@@ -498,41 +613,37 @@ class Plugin(indigo.PluginBase):
     ######################
 
     def setCool(self, pluginAction):
-        devToProcess = pluginAction.deviceId
-        device = None
-        for dev in indigo.devices.iter("self"):
-            if dev.id == devToProcess:
-                device = dev.name
-        if device != None:
+        dev = indigo.devices[pluginAction.deviceId]
+        if dev.deviceTypeId not in ("heatmiserNeostat", "heatmiserNeoTimeclock"):
+            self.logger.warning("setCool: action not supported for device type '%s'" % dev.deviceTypeId)
+            return
+        device = dev.name
+        if device:
             update = self.getNeoData("\"FROST_ON\":[\""+device+"\"]")
-            if "result" in update:
-                indigo.server.log("%s set to Cool" % device)
+            if update and "result" in update:
+                self.logger.info("%s set to Cool" % device)
             else:
-                indigo.server.log("%s Cool command failed" % device, isError=True)              
+                self.logger.error("%s Cool command failed" % device)              
     
     def setAuto(self, pluginAction):
-        devToProcess = pluginAction.deviceId
-        device = None
-        for dev in indigo.devices.iter("self"):
-            if dev.id == devToProcess:
-                device = dev.name
-        if device != None:
+        dev = indigo.devices[pluginAction.deviceId]
+        if dev.deviceTypeId not in ("heatmiserNeostat", "heatmiserNeoTimeclock"):
+            self.logger.warning("setAuto: action not supported for device type '%s'" % dev.deviceTypeId)
+            return
+        device = dev.name
+        if device:
             zilch = "0"
             holdTemp = "20"
             update = self.getNeoData("\"FROST_OFF\":[\""+device+"\"]")
             update = self.getNeoData("\"HOLD\":[{\"temp\":"+holdTemp+", \"id\":"+"\"Off\""+", \"hours\":"+zilch+", \"minutes\":"+zilch+"}, \""+device+"\"]")
-            if "result" in update:
-                indigo.server.log("%s set to Auto" % device)
+            if update and "result" in update:
+                self.logger.info("%s set to Auto" % device)
             else:
-                indigo.server.log("%s Auto command failed" % device, isError=True)
+                self.logger.error("%s Auto command failed" % device)
  
     def setOverride(self, pluginAction):
-        devToProcess = pluginAction.deviceId
-        device = None
-        for dev in indigo.devices.iter("self"):
-            if dev.id == devToProcess:
-                device = dev.name
-        if device != None:
+        device = indigo.devices[pluginAction.deviceId].name
+        if device:
             holdTemp = pluginAction.props["overrideTemp"]
             holdHours = pluginAction.props["numberOfHours"]
             if holdHours == "0.5":
@@ -540,30 +651,85 @@ class Plugin(indigo.PluginBase):
             	holdMins = "30"
             else:
             	holdMins = "0"
-            #update = self.getNeoDataupdate = self.getNeoData("\"HOLD\":[{\"temp\":"+holdTemp+", \"id\":"+"\"Off\""+", \"hours\":"+holdHours+", \"minutes\":"+holdMins+"}, \""+device.name+"\"]")
             update = self.getNeoData("\"HOLD\":[{\"temp\":"+holdTemp+", \"id\":"+"\"Off\""+", \"hours\":"+holdHours+", \"minutes\":"+holdMins+"}, \""+device+"\"]")
-            if "result" in update:
+            if update and "result" in update:
                 if holdHours[0] == "0":
                     holdHours = holdHours[1:]
-                indigo.server.log("%s set to Override at %s degrees for %s hours" % (device, holdTemp, holdHours))
+                self.logger.info("%s set to Override at %s degrees for %s hours" % (device, holdTemp, holdHours))
             else:
-                indigo.server.log("%s Override command failed" % device, isError=True)
+                self.logger.error("%s Override command failed" % device)
                 
  
                 
     ########################################
-    # NeoPlug Action callback
+    # Timeclock and Holiday Action callbacks
     ######################
-    # Main Neohub action bottleneck called by Indigo Server.                
+    def timerBoost(self, pluginAction):
+        device = indigo.devices[pluginAction.deviceId].name
+        if device:
+            minutes = pluginAction.props.get("boostMinutes", "30")
+            update = self.getNeoData(f'"TIMER_HOLD_ON":[{minutes}, "{device}"]')
+            if update and "result" in update:
+                self.logger.info(f"{device} timer boost on for {minutes} minutes")
+            else:
+                self.logger.error(f"{device} timer boost command failed")
+
+    def timerBoostOff(self, pluginAction):
+        device = indigo.devices[pluginAction.deviceId].name
+        if device:
+            update = self.getNeoData(f'"TIMER_HOLD_ON":[0, "{device}"]')
+            if update and "result" in update:
+                self.logger.info(f"{device} timer boost cancelled")
+            else:
+                self.logger.error(f"{device} cancel timer boost failed")
+
+    def setHoliday(self, pluginAction):
+        endDateStr = pluginAction.props.get("holidayEndDate", "")
+        endTimeStr = pluginAction.props.get("holidayEndTime", "12:00")
+        if not endDateStr:
+            self.logger.error("Set Holiday: end date is required (DD/MM/YYYY)")
+            return
+        try:
+            endDate = datetime.datetime.strptime(endDateStr.strip(), "%d/%m/%Y")
+        except ValueError:
+            self.logger.error("Set Holiday: invalid date format '%s' (expected DD/MM/YYYY)" % endDateStr)
+            return
+        try:
+            timeParts = endTimeStr.strip().split(":")
+            endHour = int(timeParts[0])
+            endMinute = int(timeParts[1]) if len(timeParts) > 1 else 0
+            endDate = endDate.replace(hour=endHour, minute=endMinute)
+        except (ValueError, IndexError):
+            self.logger.error("Set Holiday: invalid time format '%s' (expected HH:MM)" % endTimeStr)
+            return
+        now = datetime.datetime.now()
+        if endDate <= now:
+            self.logger.error("Set Holiday: end date %s is not in the future" % endDate.strftime("%d/%m/%Y %H:%M"))
+            return
+        startStr = now.strftime("%H%M%S%d%m%Y")
+        endStr = endDate.strftime("%H%M00%d%m%Y")
+        update = self.getNeoData('"HOLIDAY":["%s","%s"]' % (startStr, endStr))
+        if update and "result" in update:
+            self.logger.info("Holiday mode set until %s" % endDate.strftime("%d/%m/%Y %H:%M"))
+        else:
+            self.logger.error("Set Holiday command failed")
+
+    def cancelHoliday(self, pluginAction):
+        update = self.getNeoData('"CANCEL_HOLIDAY":0')
+        if update and "result" in update:
+            self.logger.info("Holiday mode cancelled")
+        else:
+            self.logger.error("Cancel Holiday command failed")
+
     def changeIp(self, action):
         oldIP = self.neohubIP
         newIp = action.props.get("newIp", "")
         if newIp != "":
             self.neohubIP = newIp
             if self.neohubIP != oldIP:
-                indigo.server.log("Neohub IP address is now %s" % self.neohubIP)
+                self.logger.info("Neohub IP address is now %s" % self.neohubIP)
         else:
-            indigo.server.log("Invalid IP address supplied", isError=True)
+            self.logger.error("Invalid IP address supplied")
                 
 
 
@@ -581,7 +747,7 @@ class Plugin(indigo.PluginBase):
             dev.updateStateOnServer("onOffState", False)
             dev.updateStateImageOnServer(indigo.kStateImageSel.PowerOff)
         else:
-            indigo.server.log("This action is not currently supported", isError=True)
+            self.logger.error("This action is not currently supported")
             
                 
     ########################################
@@ -592,44 +758,44 @@ class Plugin(indigo.PluginBase):
         if action.thermostatAction == indigo.kThermostatAction.SetHeatSetpoint:
             newSetpoint = str(action.actionValue)
             update = self.getNeoData("\"SET_TEMP\":["+newSetpoint+", \""+dev.name+"\"]")
-            if "result" in update:
+            if update and "result" in update:
                 dev.updateStateOnServer("setpointHeat", newSetpoint)
-                indigo.server.log("%s setpoint set to %s degC" % (dev.name, newSetpoint))
+                self.logger.info("%s setpoint set to %s degC" % (dev.name, newSetpoint))
             
         elif action.thermostatAction == indigo.kThermostatAction.DecreaseHeatSetpoint:
             newSetpoint = str(dev.heatSetpoint - action.actionValue)
             update = self.getNeoData("\"SET_TEMP\":["+newSetpoint+", \""+dev.name+"\"]")
-            if "result" in update:
+            if update and "result" in update:
                 dev.updateStateOnServer("setpointHeat", newSetpoint)
-                indigo.server.log("%s setpoint decreased to %s degC" % (dev.name, newSetpoint))
+                self.logger.info("%s setpoint decreased to %s degC" % (dev.name, newSetpoint))
         
         elif action.thermostatAction == indigo.kThermostatAction.IncreaseHeatSetpoint:
             newSetpoint = str(dev.heatSetpoint + action.actionValue)
             update = self.getNeoData("\"SET_TEMP\":["+newSetpoint+", \""+dev.name+"\"]")
-            if "result" in update:
+            if update and "result" in update:
                 dev.updateStateOnServer("setpointHeat", newSetpoint)
-                indigo.server.log("%s setpoint increased to %s degC" % (dev.name, newSetpoint))     
+                self.logger.info("%s setpoint increased to %s degC" % (dev.name, newSetpoint))
                     
         elif action.thermostatAction == indigo.kThermostatAction.SetHvacMode:
             newMode = action.actionMode
             if newMode == indigo.kHvacMode.Off:
-                indigo.server.log(u"Thermostat does not have an 'Off' mode", isError=True)
+                self.logger.error("Thermostat does not have an 'Off' mode")
                 return False
             elif newMode == indigo.kHvacMode.HeatCool:
-                indigo.server.log("Setting %s to 'Auto' mode" % dev.name)
+                self.logger.info("Setting %s to 'Auto' mode" % dev.name)
                 resDict = self.getNeoData("\"FROST_OFF\":[\""+dev.name+"\"]")
                 holdTemp = "20"
                 zilch = "0"
                 resDict = self.getNeoData("\"HOLD\":[{\"temp\":"+holdTemp+", \"id\":"+"\"Off\""+", \"hours\":"+zilch+", \"minutes\":"+zilch+"}, \""+dev.name+"\"]")
             elif newMode == indigo.kHvacMode.Heat:
-                indigo.server.log("Setting %s to 'Heat' mode" % dev.name)
+                self.logger.info("Setting %s to 'Heat' mode" % dev.name)
                 resDict = self.getNeoData("\"FROST_OFF\":[\""+dev.name+"\"]")
                 holdTemp = "20"
                 holdHours = "1"
                 holdMins = "0"
                 resDict = self.getNeoData("\"HOLD\":[{\"temp\":"+holdTemp+", \"id\":"+"\"On\""+", \"hours\":"+holdHours+", \"minutes\":"+holdMins+"}, \""+dev.name+"\"]")
             elif newMode == indigo.kHvacMode.Cool:
-                indigo.server.log("Setting %s to 'Cool' mode" % dev.name)
+                self.logger.info("Setting %s to 'Cool' mode" % dev.name)
                 holdTemp = "20"
                 zilch = "0"
                 resDict = self.getNeoData("\"HOLD\":[{\"temp\":"+holdTemp+", \"id\":"+"\"Off\""+", \"hours\":"+zilch+", \"minutes\":"+zilch+"}, \""+dev.name+"\"]")
@@ -639,12 +805,12 @@ class Plugin(indigo.PluginBase):
         elif action.thermostatAction in [indigo.kThermostatAction.RequestStatusAll, indigo.kThermostatAction.RequestMode,
             indigo.kThermostatAction.RequestEquipmentState, indigo.kThermostatAction.RequestTemperatures, indigo.kThermostatAction.RequestHumidities,
             indigo.kThermostatAction.RequestDeadbands, indigo.kThermostatAction.RequestSetpoints]:
-            indigo.server.log(u"Status automatically updated every minute", isError=True)
+            self.logger.info("Status automatically updated every 30 seconds")
         
         elif (action.thermostatAction == indigo.kThermostatAction.DecreaseCoolSetpoint) or (action.thermostatAction == indigo.kThermostatAction.IncreaseCoolSetpoint):
             pass
             
         else:
-            indigo.server.log("Action %s is not currently supported" % (action.thermostatAction), isError=True)
+            self.logger.error("Action %s is not currently supported" % action.thermostatAction)
 
 

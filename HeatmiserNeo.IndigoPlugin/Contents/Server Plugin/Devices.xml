@@ -51,14 +51,14 @@
 				<ControlPageLabel>NTP Status</ControlPageLabel>
 			</State>
 			<State id="Holiday">
-				<ValueType>String</ValueType>
+				<ValueType>Boolean</ValueType>
 				<TriggerLabel>Holiday Mode</TriggerLabel>
 				<ControlPageLabel>Holiday Mode</ControlPageLabel>
 			</State>
-			<State id="Holiday_Days">
+			<State id="Holiday_End">
 				<ValueType>String</ValueType>
-				<TriggerLabel>Holiday Days Remaining</TriggerLabel>
-				<ControlPageLabel>Holiday Days Remaining</ControlPageLabel>
+				<TriggerLabel>Holiday End Date</TriggerLabel>
+				<ControlPageLabel>Holiday End Date</ControlPageLabel>
 			</State>
 			<State id="Prog_Format">
 				<ValueType>String</ValueType>
@@ -71,7 +71,7 @@
 				<ControlPageLabel>Temperature units (degC or degF)</ControlPageLabel>
 			</State>
 			<State id="Away">
-				<ValueType>String</ValueType>
+				<ValueType>Boolean</ValueType>
 				<TriggerLabel>User has set Away mode</TriggerLabel>
 				<ControlPageLabel>User has set Away mode</ControlPageLabel>
 			</State>
@@ -94,6 +94,36 @@
 				<ValueType>String</ValueType>
 				<TriggerLabel>Switching Differential (deg)</TriggerLabel>
 				<ControlPageLabel>Switching Differential (deg)</ControlPageLabel>
+			</State>
+		</States>
+	</Device>
+	<Device type="relay" id="heatmiserNeoTimeclock" allowUserCreation="false">
+		<Name>Heatmiser Neo Timeclock</Name>
+		<States>
+			<State id="onOffState">
+				<ValueType>Boolean</ValueType>
+				<TriggerLabel>Timeclock On</TriggerLabel>
+				<ControlPageLabel>Timeclock Status</ControlPageLabel>
+			</State>
+			<State id="temperatureInput1">
+				<ValueType>Number</ValueType>
+				<TriggerLabel>Temperature</TriggerLabel>
+				<ControlPageLabel>Temperature</ControlPageLabel>
+			</State>
+			<State id="ShortMode">
+				<ValueType>String</ValueType>
+				<TriggerLabel>Short Mode</TriggerLabel>
+				<ControlPageLabel>Short Mode</ControlPageLabel>
+			</State>
+			<State id="Holiday">
+				<ValueType>Boolean</ValueType>
+				<TriggerLabel>Holiday Mode</TriggerLabel>
+				<ControlPageLabel>Holiday Mode</ControlPageLabel>
+			</State>
+			<State id="Away">
+				<ValueType>Boolean</ValueType>
+				<TriggerLabel>Away Mode</TriggerLabel>
+				<ControlPageLabel>Away Mode</ControlPageLabel>
 			</State>
 		</States>
 	</Device>
