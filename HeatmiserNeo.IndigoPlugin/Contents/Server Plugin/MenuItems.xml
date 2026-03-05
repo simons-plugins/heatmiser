@@ -1,0 +1,7 @@
+<?xml version="1.0"?>
+<MenuItems>
+    <MenuItem id="discoverNeohub">
+        <Name>Discover NeoHub (HubSeek)</Name>
+        <CallbackMethod>discoverNeohub</CallbackMethod>
+    </MenuItem>
+</MenuItems>

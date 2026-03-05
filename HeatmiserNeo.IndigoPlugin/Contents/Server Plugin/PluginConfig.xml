@@ -6,6 +6,10 @@
 	<Field id="neohubIP" type="textfield" defaultValue="192.168.0.1">
 		<Label>Neohub IP address:</Label>
 	</Field>
+	<Field id="sep0" type="separator"/>
+	<Field id="neohubGen2" type="checkbox" defaultValue="true" tooltip="Uncheck for original NeoHub (Gen 1). Gen 2 uses newer API commands.">
+		<Label>NeoHub Gen 2 (newer hardware): </Label>
+	</Field>
 	<Field id="sep1" type="separator"/>
 	<Field id="timeSync" type="checkbox" defaultValue="false" tooltip="Check to synchronise Neo time with Indigo once per day">
 		<Label>Synchronise Neo time with Indigo: </Label>
