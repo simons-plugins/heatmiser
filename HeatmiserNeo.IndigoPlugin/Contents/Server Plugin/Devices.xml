@@ -10,11 +10,6 @@
 	<Device type="relay" id="heatmiserNeoplug" allowUserCreation="false">
 		<Name>Heatmiser Neoplug</Name>
 		<States>
-			<State id="onOffState">
-				<ValueType>Boolean</ValueType>
-				<TriggerLabel>Neoplug On</TriggerLabel>
-				<ControlPageLabel>Neoplug Status</ControlPageLabel>
-			</State>
 		</States>
 	</Device>
 	<Device type="thermostat" id="heatmiserNeostat" allowUserCreation="false">
@@ -100,11 +95,6 @@
 	<Device type="relay" id="heatmiserNeoTimeclock" allowUserCreation="false">
 		<Name>Heatmiser Neo Timeclock</Name>
 		<States>
-			<State id="onOffState">
-				<ValueType>Boolean</ValueType>
-				<TriggerLabel>Timeclock On</TriggerLabel>
-				<ControlPageLabel>Timeclock Status</ControlPageLabel>
-			</State>
 			<State id="temperatureInput1">
 				<ValueType>Number</ValueType>
 				<TriggerLabel>Temperature</TriggerLabel>
