@@ -467,16 +467,16 @@ class Plugin(indigo.PluginBase):
         cmd_id = self._command_id
         inner_command = json.dumps({
             "token": self.neohubToken,
-            "COMMANDS": [{"COMMAND": json.loads("{" + cmdPhrase + "}"), "COMMANDID": cmd_id}]
+            "COMMANDS": [{"COMMAND": str(json.loads("{" + cmdPhrase + "}")), "COMMANDID": cmd_id}]
         })
         message = json.dumps({
             "message_type": "hm_get_command_queue",
             "message": inner_command
         })
-        if self.logComms:
-            self.logger.info("WSS --> %s" % message)
         ws = self._get_wss()
         ws.send(message)
+        if self.logComms:
+            self.logger.info("WSS --> %s" % message)
         for _ in range(5):
             response_text = ws.recv(timeout=10)
             if self.logComms:
@@ -500,15 +500,14 @@ class Plugin(indigo.PluginBase):
         except (ConnectionClosed, ConnectionError, TimeoutError, OSError) as exc:
             self._close_wss()
             self.connectErrorCount += 1
-            if self.connectErrorCount == 3:
+            if self.connectErrorCount <= 3:
                 self.logger.error("getNeoData WSS: connection error (%s)" % exc)
             return ""
         except Exception as exc:
             self._close_wss()
             self.sendErrorCount += 1
-            if self.sendErrorCount == 3:
+            if self.sendErrorCount <= 3:
                 self.logger.error("getNeoData WSS: error (%s)" % exc)
-                self.sendErrorCount = 0
             return ""
 
     def _get_neo_data_tcp(self, cmdPhrase):
