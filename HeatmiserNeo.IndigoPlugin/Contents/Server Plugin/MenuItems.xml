@@ -4,4 +4,8 @@
         <Name>Discover NeoHub (HubSeek)</Name>
         <CallbackMethod>discoverNeohub</CallbackMethod>
     </MenuItem>
+    <MenuItem id="testConnection">
+        <Name>Test NeoHub Connection</Name>
+        <CallbackMethod>testConnection</CallbackMethod>
+    </MenuItem>
 </MenuItems>

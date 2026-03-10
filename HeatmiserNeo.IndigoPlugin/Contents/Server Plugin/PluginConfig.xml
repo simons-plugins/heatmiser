@@ -7,7 +7,22 @@
 		<Label>Neohub IP address:</Label>
 	</Field>
 	<Field id="sep0" type="separator"/>
-	<Field id="neohubGen2" type="checkbox" defaultValue="true" tooltip="Uncheck for original NeoHub (Gen 1). Gen 2 uses newer API commands.">
+	<Field id="connectionMode" type="menu" defaultValue="wss"
+		tooltip="WSS (recommended): Secure WebSocket on port 4243 with API token. Legacy TCP: Unsecured port 4242, no auth.">
+		<Label>Connection mode:</Label>
+		<List>
+			<Option value="wss">WSS — Secure WebSocket (port 4243)</Option>
+			<Option value="tcp">Legacy TCP (port 4242)</Option>
+		</List>
+	</Field>
+	<Field id="neohubToken" type="textfield" defaultValue=""
+		visibleBindingId="connectionMode" visibleBindingValue="wss"
+		tooltip="Generate in Heatmiser Neo App: Settings > Api Access > Tokens.">
+		<Label>API Token:</Label>
+	</Field>
+	<Field id="neohubGen2" type="checkbox" defaultValue="true"
+		visibleBindingId="connectionMode" visibleBindingValue="tcp"
+		tooltip="Uncheck for original NeoHub (Gen 1). Gen 2 uses newer API commands over legacy TCP.">
 		<Label>NeoHub Gen 2 (newer hardware): </Label>
 	</Field>
 	<Field id="sep1" type="separator"/>
