@@ -17,13 +17,23 @@ Integrates Heatmiser Neo heating system with Indigo home automation via the Neoh
 
 ### Communication Protocol
 
-The plugin communicates directly with a **Neohub** device using TCP sockets:
-- **Port**: 4242
-- **Protocol**: JSON over TCP with null terminator (`\0`)
+The plugin supports two connection modes to the **Neohub** device:
+
+**WSS — Secure WebSocket (default, recommended):**
+- **Port**: 4243 (TLS, self-signed cert)
+- **Protocol**: Two-layer JSON envelope over WebSocket. Outer message has `message_type` + `message` fields; inner payload contains API token and `COMMANDS` array with `COMMAND`/`COMMANDID` pairs.
+- **Authentication**: API token (generated in Heatmiser Neo App → Settings → Api Access → Tokens)
+- **Connection**: Persistent WebSocket, thread-safe via `_wss_lock`. Automatically reconnects on failure.
+- **Timeout**: 8 seconds for connection, 10 seconds for response
+
+**Legacy TCP (port 4242):**
+- **Port**: 4242 (unencrypted, no auth)
+- **Protocol**: JSON over TCP with null terminator (`\0`). Opens a new socket per command.
 - **Timeout**: 8 seconds for socket operations
+
 - **IP Address**: Configurable via plugin preferences (default: 192.168.0.1)
 
-All commands are sent as JSON objects wrapped in curly braces: `{"COMMAND":value}`
+All commands are sent as JSON objects: `{"COMMAND":value}`. The WSS path wraps them in the token-authenticated envelope; the TCP path sends them directly with a null terminator.
 
 ### Concurrent Thread Architecture
 
@@ -90,11 +100,14 @@ Heatmiser modes are mapped to Indigo HVAC modes:
 
 ## Plugin Configuration
 
-**PluginConfig.xml** defines three settings:
+**PluginConfig.xml** defines these settings:
 
 1. **neohubIP**: IP address of Neohub (default: 192.168.0.1)
-2. **timeSync**: If true, sync Neohub time with Indigo daily; if false, use NTP
-3. **logComms**: If true, log all socket communications to Indigo Event Log
+2. **connectionMode**: `wss` (default) or `tcp` — selects WSS port 4243 or legacy TCP port 4242
+3. **neohubToken**: API token for WSS authentication (only visible when connectionMode is `wss`)
+4. **neohubGen2**: Gen 2 API toggle (only visible when connectionMode is `tcp`; forced `True` for WSS)
+5. **timeSync**: If true, sync Neohub time with Indigo daily; if false, use NTP
+6. **logComms**: If true, log all communications to Indigo Event Log (token is redacted in WSS logs)
 
 ## Available Actions
 
@@ -111,16 +124,19 @@ Defined in [Actions.xml](HeatmiserNeo.IndigoPlugin/Contents/Server Plugin/Action
 
 ### Error Handling Strategy
 
-The plugin uses error counters to avoid log spam ([plugin.py:44-45](HeatmiserNeo.IndigoPlugin/Contents/Server Plugin/plugin.py#L44-L45)):
-- `connectErrorCount`: Only logs socket connection errors after 3 failures
-- `sendErrorCount`: Only logs socket send errors after 3 failures
-- Counters reset on successful communication
+The plugin uses error counters to avoid log spam:
+- `connectErrorCount` / `sendErrorCount`: Track consecutive failures per transport
+- **WSS path**: Logs the first 3 errors, then every 10th failure. Counters reset on success.
+- **TCP path**: Logs only on the 3rd consecutive failure. `sendErrorCount` resets after logging.
+- Both counters reset to 0 on any successful command.
 
-### Multi-Packet Response Handling
+### Multi-Packet Response Handling (TCP only)
 
-Some commands (INFO, ENGINEERS_DATA) return large JSON responses that may arrive in multiple TCP packets. The plugin handles this by checking for complete JSON markers:
-- `INFO` command: Waits for `}]}` at end of response
-- `ENGINEERS_DATA`: Waits for `}}` at end of response
+On the legacy TCP path, some commands (INFO/GET_LIVE_DATA, ENGINEERS_DATA/GET_ENGINEERS) return large JSON responses that may arrive in multiple TCP packets. The plugin handles this by checking for complete JSON markers:
+- `INFO`/`GET_LIVE_DATA` command: Waits for `}]}` at end of response
+- `ENGINEERS_DATA`/`GET_ENGINEERS`: Waits for `}}` at end of response
+
+The WSS path does not need this — WebSocket messages are framed at the protocol level.
 
 ### JSON Parsing Resilience
 
@@ -176,7 +192,7 @@ If invalid names are detected, the plugin logs an error and you must rename the 
 Heatmiser Neo devices don't support cooling. The "Cool" mode in Indigo is mapped to frost protection. Indigo commands for cool setpoints are ignored.
 
 ### Status Update Frequency
-Device status is updated every 30 seconds. Manual status request actions are not supported - the plugin logs "Status automatically updated every minute" for these requests.
+Device status is updated every 30 seconds. Manual status request actions are not supported - the plugin logs "Status automatically updated every 30 seconds" for these requests.
 
 ## Development History
 
