@@ -10,7 +10,17 @@
 import re
 import json
 import socket
+import ssl
 import datetime
+import threading
+
+try:
+    from websockets.sync.client import connect as ws_connect
+    from websockets.exceptions import ConnectionClosed
+    HAS_WEBSOCKETS = True
+except ImportError:
+    HAS_WEBSOCKETS = False
+    ConnectionClosed = type(None)  # safe fallback for except clause
 
 ################################################################################
 # Globals
@@ -41,11 +51,16 @@ class Plugin(indigo.PluginBase):
         self.neohubIP = pluginPrefs.get("neohubIP", "127.0.0.1")
         self.logComms = self._coerce_bool(pluginPrefs.get("logComms", False))
         self.timeSync = self._coerce_bool(pluginPrefs.get("timeSync", False))
-        self.neohubGen2 = self._coerce_bool(pluginPrefs.get("neohubGen2", True))
+        self.connectionMode = pluginPrefs.get("connectionMode", "wss")
+        self.neohubGen2 = True if self.connectionMode == "wss" else self._coerce_bool(pluginPrefs.get("neohubGen2", True))
+        self.neohubToken = pluginPrefs.get("neohubToken", "").strip()
         self.commsEnabled = True
         self.connectErrorCount = 0
         self.sendErrorCount = 0
         self.neoDevice = None
+        self._wss = None
+        self._wss_lock = threading.Lock()
+        self._command_id = 0
         self.timeUpdateRequired = None
         self.dcbUpdateRequired = None
         self.engUpdateRequired = None
@@ -56,10 +71,18 @@ class Plugin(indigo.PluginBase):
     ########################################
     def startup(self):
         self.logger.info("Starting Heatmiser Neo plugin")
-        if self.neohubGen2:
-            self.logger.info("Using NeoHub Gen 2 API")
+        if self.connectionMode == "wss":
+            if not self.neohubToken:
+                self.logger.warning("WSS mode selected but no API token configured — enter token in plugin preferences")
+            elif not HAS_WEBSOCKETS:
+                self.logger.warning("WSS mode selected but websockets library not available — falling back to legacy TCP (port 4242)")
+            else:
+                self.logger.info("Using WSS connection (port 4243)")
         else:
-            self.logger.info("Using NeoHub Gen 1 (legacy) API")
+            if self.neohubGen2:
+                self.logger.info("Using legacy TCP connection (port 4242) with Gen 2 API commands")
+            else:
+                self.logger.info("Using legacy TCP connection (port 4242) with Gen 1 API commands")
         if self.logComms:
             self.logger.info("Neo comms logging is on")
         else:
@@ -79,6 +102,7 @@ class Plugin(indigo.PluginBase):
     def shutdown(self):
         self.logger.info("Stopping Heatmiser Neo plugin")
         self.commsEnabled = False
+        self._close_wss()
 
         
     ########################################
@@ -142,11 +166,25 @@ class Plugin(indigo.PluginBase):
                     self.ntpOn()
                     self.logger.info("Neo time will be syncronised via NTP server")
                 self.updateDCB()
-            self.neohubGen2 = self._coerce_bool(valuesDict.get("neohubGen2", True))
+            oldMode = self.connectionMode
+            self.connectionMode = valuesDict.get("connectionMode", "wss")
+            self.neohubGen2 = True if self.connectionMode == "wss" else self._coerce_bool(valuesDict.get("neohubGen2", True))
+            oldToken = self.neohubToken
+            self.neohubToken = valuesDict.get("neohubToken", "").strip()
+            needs_reconnect = False
+            if self.connectionMode != oldMode or self.neohubToken != oldToken:
+                needs_reconnect = True
+                if self.connectionMode == "wss" and self.neohubToken:
+                    self.logger.info("Using WSS connection (port 4243)")
+                else:
+                    self.logger.info("Using legacy TCP connection (port 4242)")
             oldIP = self.neohubIP
             self.neohubIP = valuesDict.get("neohubIP")
             if self.neohubIP != oldIP:
                 self.logger.info("Neohub IP address is now %s" % self.neohubIP)
+                needs_reconnect = True
+            if needs_reconnect:
+                self._close_wss()
 
                         
     ########################################
@@ -401,63 +439,163 @@ class Plugin(indigo.PluginBase):
 
 
     def getNeoData(self, cmdPhrase):
-        if self.commsEnabled:
-            tcp_ip = self.neohubIP
-            tcp_port = 4242
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(8)
-            try:
-                try:
-                    sock.connect((tcp_ip, tcp_port))
-                    self.connectErrorCount = 0
-                except socket.timeout:
-                    self.connectErrorCount += 1
-                    if (self.connectErrorCount == 3):
-                        self.logger.error("getNeoData: Socket timeout error")
-                    return ""
-                except Exception:
-                    self.connectErrorCount += 1
-                    if (self.connectErrorCount == 3):
-                        self.logger.error("getNeoData: Socket connect error")
-                    return ""
-                cmdPhrase = b"{"+bytes(cmdPhrase, 'ascii')+b"}"
-                try:
-                    if self.logComms:
-                        self.logger.info("--> %s" % cmdPhrase)
-                    sock.send(cmdPhrase+b"\0")
-                    dataj = None
-                    dataj = sock.recv(4096)
-                    while ((b"GET_LIVE_DATA" in cmdPhrase or b"INFO" in cmdPhrase) and (b"}]}" not in dataj[len(dataj)-5:len(dataj)-1])) or ((b"GET_ENGINEERS" in cmdPhrase or b"ENGINEERS_DATA" in cmdPhrase) and (b"}}" not in dataj[len(dataj)-4:len(dataj)-1])):
-                        chunk = sock.recv(4096)
-                        if not chunk:
-                            raise ConnectionError("NeoHub connection closed unexpectedly")
-                        dataj = dataj + chunk
-                    self.sendErrorCount = 0
-                    if self.logComms:
-                        self.logger.info("<-- %s" % dataj)
-                except socket.error as v:
-                    self.sendErrorCount += 1
-                    if (self.sendErrorCount == 3):
-                        self.logger.error("getNeoData: Socket send error (%s)" % v)
-                        self.sendErrorCount = 0
-                    return ""
-                if dataj != None:
-                    datak = re.sub(b'[^\s!-~]', b'', dataj)   #Filter extraneous characters which cause json decode to fail
-                    data = json.loads(datak)
-                    self.connectErrorCount = 0
-                    self.sendErrorCount = 0
-                    if "error" in data:
-                        self.logger.error("Command: %s" % cmdPhrase)
-                        self.logger.error(data["error"])
-                        return ""
-                    else:
-                        return data
-                else:
-                    return ""
-            finally:
-                sock.close()
-        else:
+        if not self.commsEnabled:
             return ""
+        if self.connectionMode == "wss" and self.neohubToken and HAS_WEBSOCKETS:
+            return self._get_neo_data_wss(cmdPhrase)
+        else:
+            if self.connectionMode == "wss" and not getattr(self, '_wss_fallback_warned', False):
+                self.logger.warning("WSS mode configured but not available (token=%s, library=%s) — using TCP fallback"
+                    % ("set" if self.neohubToken else "missing", "available" if HAS_WEBSOCKETS else "missing"))
+                self._wss_fallback_warned = True
+            return self._get_neo_data_tcp(cmdPhrase)
+
+    def _close_wss(self):
+        with self._wss_lock:
+            if self._wss is not None:
+                try:
+                    self._wss.close()
+                except Exception as exc:
+                    self.logger.debug("WSS close error (ignored): %s" % exc)
+                self._wss = None
+
+    def _ensure_wss(self):
+        """Return existing WSS connection or create new one. Must be called under _wss_lock."""
+        if self._wss is not None:
+            return self._wss
+        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE  # NeoHub uses self-signed cert on local network
+        uri = "wss://%s:4243" % self.neohubIP
+        self._wss = ws_connect(uri, ssl=ssl_context, open_timeout=8)
+        return self._wss
+
+    def _send_wss(self, cmdPhrase):
+        """Send command via WSS and return parsed response.
+
+        The Heatmiser WSS protocol uses a two-layer JSON envelope: the outer
+        message has message_type + message fields, the inner payload contains
+        the API token and COMMANDS array. The hub may send async messages
+        between command/response pairs, so we filter for hm_set_command_response.
+        """
+        with self._wss_lock:
+            self._command_id += 1
+            cmd_id = self._command_id
+            # NeoHub WSS API expects Python-style dict string representation, not JSON
+            inner_command = json.dumps({
+                "token": self.neohubToken,
+                "COMMANDS": [{"COMMAND": str(json.loads("{" + cmdPhrase + "}")), "COMMANDID": cmd_id}]
+            })
+            message = json.dumps({
+                "message_type": "hm_get_command_queue",
+                "message": inner_command
+            })
+            ws = self._ensure_wss()
+            ws.send(message)
+            if self.logComms:
+                log_msg = message.replace(self.neohubToken, "***") if self.neohubToken else message
+                self.logger.info("WSS --> %s" % log_msg)
+            for _ in range(5):
+                response_text = ws.recv(timeout=10)
+                if self.logComms:
+                    self.logger.info("WSS <-- %s" % response_text)
+                try:
+                    response = json.loads(response_text)
+                except json.JSONDecodeError as exc:
+                    self.logger.error("WSS: failed to parse response: %s" % exc)
+                    continue
+                msg_type = response.get("message_type", "unknown")
+                if msg_type == "hm_set_command_response":
+                    try:
+                        return json.loads(response["response"])
+                    except (json.JSONDecodeError, KeyError) as exc:
+                        self.logger.error("WSS: failed to parse command response: %s" % exc)
+                        return ""
+                else:
+                    self.logger.debug("WSS: skipping message type '%s'" % msg_type)
+            self.logger.warning("No command response received after 5 messages")
+            return ""
+
+    def _get_neo_data_wss(self, cmdPhrase):
+        """WSS equivalent of _get_neo_data_tcp. On connection failure, closes
+        the persistent socket so the next call reconnects via _ensure_wss."""
+        try:
+            result = self._send_wss(cmdPhrase)
+            self.connectErrorCount = 0
+            self.sendErrorCount = 0
+            if isinstance(result, dict) and "error" in result:
+                self.logger.error("Command: {%s}" % cmdPhrase)
+                self.logger.error(result["error"])
+                return ""
+            return result
+        except (ConnectionClosed, ConnectionError, TimeoutError, OSError) as exc:
+            self._close_wss()
+            self.connectErrorCount += 1
+            if self.connectErrorCount <= 3 or self.connectErrorCount % 10 == 0:
+                self.logger.error("getNeoData WSS: connection error #%d (%s)" % (self.connectErrorCount, exc))
+            return ""
+        except Exception as exc:
+            self._close_wss()
+            self.sendErrorCount += 1
+            if self.sendErrorCount <= 3 or self.sendErrorCount % 10 == 0:
+                self.logger.error("getNeoData WSS: unexpected error #%d [%s]: %s" % (self.sendErrorCount, type(exc).__name__, exc))
+            return ""
+
+    def _get_neo_data_tcp(self, cmdPhrase):
+        tcp_ip = self.neohubIP
+        tcp_port = 4242
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(8)
+        try:
+            try:
+                sock.connect((tcp_ip, tcp_port))
+                self.connectErrorCount = 0
+            except socket.timeout:
+                self.connectErrorCount += 1
+                if (self.connectErrorCount == 3):
+                    self.logger.error("getNeoData: Socket timeout error")
+                return ""
+            except Exception:
+                self.connectErrorCount += 1
+                if (self.connectErrorCount == 3):
+                    self.logger.error("getNeoData: Socket connect error")
+                return ""
+            cmdPhrase = b"{"+bytes(cmdPhrase, 'ascii')+b"}"
+            try:
+                if self.logComms:
+                    self.logger.info("--> %s" % cmdPhrase)
+                sock.send(cmdPhrase+b"\0")
+                dataj = None
+                dataj = sock.recv(4096)
+                while ((b"GET_LIVE_DATA" in cmdPhrase or b"INFO" in cmdPhrase) and (b"}]}" not in dataj[len(dataj)-5:len(dataj)-1])) or ((b"GET_ENGINEERS" in cmdPhrase or b"ENGINEERS_DATA" in cmdPhrase) and (b"}}" not in dataj[len(dataj)-4:len(dataj)-1])):
+                    chunk = sock.recv(4096)
+                    if not chunk:
+                        raise ConnectionError("NeoHub connection closed unexpectedly")
+                    dataj = dataj + chunk
+                self.sendErrorCount = 0
+                if self.logComms:
+                    self.logger.info("<-- %s" % dataj)
+            except socket.error as v:
+                self.sendErrorCount += 1
+                if (self.sendErrorCount == 3):
+                    self.logger.error("getNeoData: Socket send error (%s)" % v)
+                    self.sendErrorCount = 0
+                return ""
+            if dataj != None:
+                datak = re.sub(b'[^\s!-~]', b'', dataj)   #Filter extraneous characters which cause json decode to fail
+                data = json.loads(datak)
+                self.connectErrorCount = 0
+                self.sendErrorCount = 0
+                if "error" in data:
+                    self.logger.error("Command: %s" % cmdPhrase)
+                    self.logger.error(data["error"])
+                    return ""
+                else:
+                    return data
+            else:
+                return ""
+        finally:
+            sock.close()
 
 
     def checkTime(self):
@@ -606,6 +744,17 @@ class Plugin(indigo.PluginBase):
         finally:
             sock.close()
 
+    def testConnection(self):
+        mode = "WSS (port 4243)" if (self.connectionMode == "wss" and self.neohubToken and HAS_WEBSOCKETS) else "TCP (port 4242)"
+        self.logger.info("Testing %s connection to %s..." % (mode, self.neohubIP))
+        result = self.getNeoData('"GET_LIVE_DATA":0' if self.neohubGen2 else '"INFO":0')
+        if result and isinstance(result, dict):
+            count = len(result.get("devices", []))
+            self.logger.info("Connection OK — found %d devices" % count)
+        elif result:
+            self.logger.info("Connection OK — received response")
+        else:
+            self.logger.error("Connection test failed")
 
 
     ########################################
