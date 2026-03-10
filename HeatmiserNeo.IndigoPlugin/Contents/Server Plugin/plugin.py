@@ -308,8 +308,11 @@ class Plugin(indigo.PluginBase):
             # Update Holiday_End from top-level response on first device
             if self.neoDevice is not None:
                 holidayEnd = update.get("HOLIDAY_END", 0)
-                if holidayEnd and holidayEnd > 0:
-                    endDate = datetime.datetime.fromtimestamp(holidayEnd).strftime("%d/%m/%Y %H:%M")
+                if holidayEnd and str(holidayEnd) not in ("0", ""):
+                    if isinstance(holidayEnd, (int, float)):
+                        endDate = datetime.datetime.fromtimestamp(holidayEnd).strftime("%d/%m/%Y %H:%M")
+                    else:
+                        endDate = str(holidayEnd)
                 else:
                     endDate = "None"
                 self.neoDevice.updateStateOnServer(key="Holiday_End", value=endDate)
