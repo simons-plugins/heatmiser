@@ -124,4 +124,64 @@
             </Field>
         </ConfigUI>
     </Action>
+    <Action id="awayOn" deviceFilter="self">
+        <Name>Away Mode On</Name>
+        <CallbackMethod>awayOn</CallbackMethod>
+        <ConfigUI>
+            <Field id="awayOnLabel" type="label">
+                <Label>Sets device to away mode (reduced temperature).</Label>
+            </Field>
+        </ConfigUI>
+    </Action>
+    <Action id="awayOff" deviceFilter="self">
+        <Name>Away Mode Off</Name>
+        <CallbackMethod>awayOff</CallbackMethod>
+        <ConfigUI>
+            <Field id="awayOffLabel" type="label">
+                <Label>Cancels away mode and restores schedule.</Label>
+            </Field>
+        </ConfigUI>
+    </Action>
+    <Action id="lockKeypad" deviceFilter="self.heatmiserNeostat">
+        <Name>Lock Keypad</Name>
+        <CallbackMethod>lockKeypad</CallbackMethod>
+        <ConfigUI>
+            <Field id="lockPin" type="textfield" defaultValue="0000">
+                <Label>PIN (4 digits):</Label>
+            </Field>
+        </ConfigUI>
+    </Action>
+    <Action id="unlockKeypad" deviceFilter="self.heatmiserNeostat">
+        <Name>Unlock Keypad</Name>
+        <CallbackMethod>unlockKeypad</CallbackMethod>
+    </Action>
+    <Action id="cancelHold" deviceFilter="self.heatmiserNeostat">
+        <Name>Cancel Temperature Hold</Name>
+        <CallbackMethod>cancelHold</CallbackMethod>
+        <ConfigUI>
+            <Field id="cancelHoldLabel" type="label">
+                <Label>Cancels active temperature hold and returns to schedule.</Label>
+            </Field>
+        </ConfigUI>
+    </Action>
+    <Action id="setFrostTemp" deviceFilter="self.heatmiserNeostat">
+        <Name>Set Frost Protection Temperature</Name>
+        <CallbackMethod>setFrostTemp</CallbackMethod>
+        <ConfigUI>
+            <Field type="menu" id="frostTemp" defaultValue="12">
+                <Label>Frost temperature:</Label>
+                <List>
+                    <Option value="5">5 °C</Option>
+                    <Option value="7">7 °C</Option>
+                    <Option value="10">10 °C</Option>
+                    <Option value="12">12 °C</Option>
+                    <Option value="15">15 °C</Option>
+                </List>
+            </Field>
+        </ConfigUI>
+    </Action>
+    <Action id="identifyDevice" deviceFilter="self">
+        <Name>Identify Device (Flash LED)</Name>
+        <CallbackMethod>identifyDevice</CallbackMethod>
+    </Action>
 </Actions>

@@ -77,8 +77,16 @@ On startup, the plugin queries the Neohub for all connected devices ([plugin.py:
 - Current temperature, setpoint, heat state
 - Pre-heat mode, frost protection (mapped to "Cool" mode)
 - Away/Holiday modes
+- Hold time remaining and hold temperature
+- Window open, low battery, keypad locked
+- Floor temperature (when probe present, 127 = no probe)
 - Hub firmware version, DST/NTP status (stored on first device)
 - Engineering data: Rate of Change, Frost Temp, Switching Differential
+
+**NeoTimeclock** tracks:
+- On/Off state, temperature, short mode
+- Away/Holiday modes
+- Hold time remaining (for timer boost)
 
 **NeoPlug** tracks:
 - On/Off state based on timer status
@@ -118,7 +126,18 @@ Defined in [Actions.xml](HeatmiserNeo.IndigoPlugin/Contents/Server Plugin/Action
    - Temperature: 10-25°C
 2. **Building Protection** (`setCool`): Enable frost protection mode
 3. **Auto Mode** (`setAuto`): Return to programmed schedule
-4. **Change Neohub IP** (`changeIp`): Update IP address without plugin restart
+4. **Timer Boost** (`timerBoost`): Boost timeclock device on for set duration
+5. **Cancel Timer Boost** (`timerBoostOff`): Cancel active timer boost
+6. **Set Holiday** (`setHoliday`): Set all devices to holiday mode until end date
+7. **Cancel Holiday** (`cancelHoliday`): Cancel holiday mode
+8. **Away Mode On** (`awayOn`): Set device to away mode (reduced temperature)
+9. **Away Mode Off** (`awayOff`): Cancel away mode, restore schedule
+10. **Lock Keypad** (`lockKeypad`): Lock thermostat keypad with 4-digit PIN
+11. **Unlock Keypad** (`unlockKeypad`): Remove keypad lock
+12. **Cancel Hold** (`cancelHold`): Cancel active temperature hold
+13. **Set Frost Temp** (`setFrostTemp`): Set frost protection temperature per device
+14. **Identify Device** (`identifyDevice`): Flash LED to locate a device
+15. **Change Neohub IP** (`changeIp`): Update IP address without plugin restart
 
 ## Key Implementation Details
 
