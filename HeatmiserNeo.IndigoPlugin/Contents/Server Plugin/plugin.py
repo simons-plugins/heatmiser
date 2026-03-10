@@ -340,6 +340,7 @@ class Plugin(indigo.PluginBase):
                 {"key": "ShortMode", "value": shortMode},
                 {"key": "Away", "value": devData.get("AWAY", False)},
                 {"key": "Holiday", "value": devData.get("HOLIDAY", False)},
+                {"key": "HoldTimeRemaining", "value": devData.get("HOLD_TIME", "0:00")},
             ]
             if curTemp > 0:
                 stateList.append({"key": "temperatureInput1", "value": curTemp, "uiValue": "%s °C" % curTemp, "clearErrorState": True})
@@ -381,7 +382,17 @@ class Plugin(indigo.PluginBase):
                 {"key": "ShortMode", "value": shortMode},
                 {"key": "Away", "value": devData.get("AWAY", False)},
                 {"key": "Holiday", "value": devData.get("HOLIDAY", False)},
+                {"key": "HoldTimeRemaining", "value": devData.get("HOLD_TIME", "0:00")},
+                {"key": "HoldTemperature", "value": devData.get("HOLD_TEMP", 0)},
+                {"key": "WindowOpen", "value": devData.get("WINDOW_OPEN", False)},
+                {"key": "lowBattery", "value": devData.get("LOW_BATTERY", False)},
+                {"key": "Locked", "value": devData.get("LOCK", False)},
             ]
+
+            floorTemp = devData.get("CURRENT_FLOOR_TEMPERATURE", 127)
+            if floorTemp != 127:
+                stateList.append({"key": "FloorTemperature", "value": round(float(floorTemp), 1),
+                                   "uiValue": "%s °C" % round(float(floorTemp), 1)})
 
             if curTemp > 0:
                 stateList.append({"key": "temperatureInput1", "value": curTemp, "uiValue": "%s °C" % curTemp, "clearErrorState": True})
@@ -869,6 +880,65 @@ class Plugin(indigo.PluginBase):
             self.logger.info("Holiday mode cancelled")
         else:
             self.logger.error("Cancel Holiday command failed")
+
+    def awayOn(self, pluginAction):
+        device = indigo.devices[pluginAction.deviceId].name
+        update = self.getNeoData('"AWAY_ON":["%s"]' % device)
+        if update and "result" in update:
+            self.logger.info("%s away mode on" % device)
+        else:
+            self.logger.error("%s away on command failed" % device)
+
+    def awayOff(self, pluginAction):
+        device = indigo.devices[pluginAction.deviceId].name
+        update = self.getNeoData('"AWAY_OFF":["%s"]' % device)
+        if update and "result" in update:
+            self.logger.info("%s away mode off" % device)
+        else:
+            self.logger.error("%s away off command failed" % device)
+
+    def lockKeypad(self, pluginAction):
+        device = indigo.devices[pluginAction.deviceId].name
+        pin = pluginAction.props.get("lockPin", "0000")
+        digits = [int(d) for d in pin[:4]]
+        update = self.getNeoData('"LOCK":[[%s], ["%s"]]' % (",".join(str(d) for d in digits), device))
+        if update and "result" in update:
+            self.logger.info("%s keypad locked" % device)
+        else:
+            self.logger.error("%s lock keypad command failed" % device)
+
+    def unlockKeypad(self, pluginAction):
+        device = indigo.devices[pluginAction.deviceId].name
+        update = self.getNeoData('"UNLOCK":["%s"]' % device)
+        if update and "result" in update:
+            self.logger.info("%s keypad unlocked" % device)
+        else:
+            self.logger.error("%s unlock keypad command failed" % device)
+
+    def cancelHold(self, pluginAction):
+        device = indigo.devices[pluginAction.deviceId].name
+        update = self.getNeoData('"HOLD":[{"temp":20, "id":"Off", "hours":0, "minutes":0}, "%s"]' % device)
+        if update and "result" in update:
+            self.logger.info("%s hold cancelled" % device)
+        else:
+            self.logger.error("%s cancel hold command failed" % device)
+
+    def setFrostTemp(self, pluginAction):
+        device = indigo.devices[pluginAction.deviceId].name
+        temp = pluginAction.props.get("frostTemp", "12")
+        update = self.getNeoData('"SET_FROST":[%s, "%s"]' % (temp, device))
+        if update and "result" in update:
+            self.logger.info("%s frost temperature set to %s°C" % (device, temp))
+        else:
+            self.logger.error("%s set frost temp command failed" % device)
+
+    def identifyDevice(self, pluginAction):
+        device = indigo.devices[pluginAction.deviceId].name
+        update = self.getNeoData('"IDENTIFY":[1, 3, ["%s"]]' % device)
+        if update and "result" in update:
+            self.logger.info("%s identify LED flashing" % device)
+        else:
+            self.logger.error("%s identify command failed" % device)
 
     def changeIp(self, action):
         oldIP = self.neohubIP

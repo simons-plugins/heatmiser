@@ -95,6 +95,36 @@
 				<TriggerLabel>Switching Differential (deg)</TriggerLabel>
 				<ControlPageLabel>Switching Differential (deg)</ControlPageLabel>
 			</State>
+			<State id="HoldTimeRemaining">
+				<ValueType>String</ValueType>
+				<TriggerLabel>Hold Time Remaining</TriggerLabel>
+				<ControlPageLabel>Hold Time Remaining</ControlPageLabel>
+			</State>
+			<State id="HoldTemperature">
+				<ValueType>Number</ValueType>
+				<TriggerLabel>Hold Temperature</TriggerLabel>
+				<ControlPageLabel>Hold Temperature</ControlPageLabel>
+			</State>
+			<State id="WindowOpen">
+				<ValueType>Boolean</ValueType>
+				<TriggerLabel>Window Open</TriggerLabel>
+				<ControlPageLabel>Window Open</ControlPageLabel>
+			</State>
+			<State id="lowBattery">
+				<ValueType>Boolean</ValueType>
+				<TriggerLabel>Low Battery</TriggerLabel>
+				<ControlPageLabel>Low Battery</ControlPageLabel>
+			</State>
+			<State id="FloorTemperature">
+				<ValueType>Number</ValueType>
+				<TriggerLabel>Floor Temperature</TriggerLabel>
+				<ControlPageLabel>Floor Temperature</ControlPageLabel>
+			</State>
+			<State id="Locked">
+				<ValueType>Boolean</ValueType>
+				<TriggerLabel>Keypad Locked</TriggerLabel>
+				<ControlPageLabel>Keypad Locked</ControlPageLabel>
+			</State>
 		</States>
 	</Device>
 	<Device type="relay" id="heatmiserNeoTimeclock" allowUserCreation="false">
@@ -124,6 +154,11 @@
 				<ValueType>Boolean</ValueType>
 				<TriggerLabel>Away Mode</TriggerLabel>
 				<ControlPageLabel>Away Mode</ControlPageLabel>
+			</State>
+			<State id="HoldTimeRemaining">
+				<ValueType>String</ValueType>
+				<TriggerLabel>Hold Time Remaining</TriggerLabel>
+				<ControlPageLabel>Hold Time Remaining</ControlPageLabel>
 			</State>
 		</States>
 	</Device>
