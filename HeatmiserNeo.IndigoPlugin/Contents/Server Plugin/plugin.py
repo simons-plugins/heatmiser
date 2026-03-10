@@ -305,17 +305,6 @@ class Plugin(indigo.PluginBase):
                     self.updateStatState(update, stat, device)
                     if stat == 0:
                         self.neoDevice = device
-            # Update Holiday_End from top-level response on first device
-            if self.neoDevice is not None:
-                holidayEnd = update.get("HOLIDAY_END", 0)
-                if holidayEnd and str(holidayEnd) not in ("0", ""):
-                    if isinstance(holidayEnd, (int, float)):
-                        endDate = datetime.datetime.fromtimestamp(holidayEnd).strftime("%d/%m/%Y %H:%M")
-                    else:
-                        endDate = str(holidayEnd)
-                else:
-                    endDate = "None"
-                self.neoDevice.updateStateOnServer(key="Holiday_End", value=endDate)
     
             
     def updateStatState(self, neoRep, index, indigoDevice):
@@ -391,6 +380,17 @@ class Plugin(indigo.PluginBase):
                 {"key": "lowBattery", "value": devData.get("LOW_BATTERY", False)},
                 {"key": "Locked", "value": devData.get("LOCK", False)},
             ]
+
+            # Holiday_End is a hub-level field — set on every neostat so all devices show it
+            holidayEnd = neoRep.get("HOLIDAY_END", 0)
+            if holidayEnd and str(holidayEnd) not in ("0", ""):
+                if isinstance(holidayEnd, (int, float)):
+                    endDate = datetime.datetime.fromtimestamp(holidayEnd).strftime("%d/%m/%Y %H:%M")
+                else:
+                    endDate = str(holidayEnd).strip()
+                stateList.append({"key": "Holiday_End", "value": endDate})
+            else:
+                stateList.append({"key": "Holiday_End", "value": "None"})
 
             floorTemp = devData.get("CURRENT_FLOOR_TEMPERATURE", 127)
             if floorTemp != 127:
