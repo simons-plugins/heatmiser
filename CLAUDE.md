@@ -176,7 +176,7 @@ If invalid names are detected, the plugin logs an error and you must rename the 
 Heatmiser Neo devices don't support cooling. The "Cool" mode in Indigo is mapped to frost protection. Indigo commands for cool setpoints are ignored.
 
 ### Status Update Frequency
-Device status is updated every 30 seconds. Manual status request actions are not supported - the plugin logs "Status automatically updated every minute" for these requests.
+Device status is updated every 30 seconds. Manual status request actions are not supported - the plugin logs "Status automatically updated every 30 seconds" for these requests.
 
 ## Development History
 
