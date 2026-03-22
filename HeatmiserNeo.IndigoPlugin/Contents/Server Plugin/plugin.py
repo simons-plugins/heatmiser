@@ -97,7 +97,6 @@ class Plugin(indigo.PluginBase):
 
     def deviceStartComm(self, dev):
         dev.stateListOrDisplayStateIdChanged()
-        return
 
     def shutdown(self):
         self.logger.info("Stopping Heatmiser Neo plugin")
@@ -206,8 +205,8 @@ class Plugin(indigo.PluginBase):
         neoInfo = self.getNeoData("\"GET_LIVE_DATA\":0" if self.neohubGen2 else "\"INFO\":0")
         try:
             max_devices = len(neoInfo["devices"])
-        except Exception:
-            self.logger.error("Cannot detect devices")
+        except Exception as exc:
+            self.logger.error("Cannot detect devices: %s" % exc)
             max_devices = 0
         for stat in range(0, max_devices):
             devData = neoInfo["devices"][stat]
@@ -287,7 +286,11 @@ class Plugin(indigo.PluginBase):
                 self.logger.info("GET_LIVE_DATA top-level keys: %s" % list(update.keys()))
                 self.logger.info("GET_LIVE_DATA first device keys: %s" % list(update["devices"][0].keys()))
                 self.responseKeysLogged = True
-            max_devices = len(update["devices"])
+            devices = update.get("devices")
+            if devices is None:
+                self.logger.error("updateReadings: response missing 'devices' key; top-level keys: %s" % list(update.keys()))
+                return
+            max_devices = len(devices)
             for stat in range(0, max_devices):
                 device = None
                 for dev in indigo.devices.iter("self"):
@@ -566,20 +569,19 @@ class Plugin(indigo.PluginBase):
                 self.connectErrorCount = 0
             except socket.timeout:
                 self.connectErrorCount += 1
-                if (self.connectErrorCount == 3):
-                    self.logger.error("getNeoData: Socket timeout error")
+                if self.connectErrorCount <= 3 or self.connectErrorCount % 10 == 0:
+                    self.logger.error("getNeoData TCP: Socket timeout error (attempt %d)" % self.connectErrorCount)
                 return ""
-            except Exception:
+            except Exception as exc:
                 self.connectErrorCount += 1
-                if (self.connectErrorCount == 3):
-                    self.logger.error("getNeoData: Socket connect error")
+                if self.connectErrorCount <= 3 or self.connectErrorCount % 10 == 0:
+                    self.logger.error("getNeoData TCP: Socket connect error (attempt %d): %s" % (self.connectErrorCount, exc))
                 return ""
             cmdPhrase = b"{"+bytes(cmdPhrase, 'ascii')+b"}"
             try:
                 if self.logComms:
                     self.logger.info("--> %s" % cmdPhrase)
                 sock.send(cmdPhrase+b"\0")
-                dataj = None
                 dataj = sock.recv(4096)
                 while ((b"GET_LIVE_DATA" in cmdPhrase or b"INFO" in cmdPhrase) and (b"}]}" not in dataj[len(dataj)-5:len(dataj)-1])) or ((b"GET_ENGINEERS" in cmdPhrase or b"ENGINEERS_DATA" in cmdPhrase) and (b"}}" not in dataj[len(dataj)-4:len(dataj)-1])):
                     chunk = sock.recv(4096)
@@ -589,15 +591,20 @@ class Plugin(indigo.PluginBase):
                 self.sendErrorCount = 0
                 if self.logComms:
                     self.logger.info("<-- %s" % dataj)
-            except socket.error as v:
+            except socket.error as exc:
                 self.sendErrorCount += 1
-                if (self.sendErrorCount == 3):
-                    self.logger.error("getNeoData: Socket send error (%s)" % v)
-                    self.sendErrorCount = 0
+                if self.sendErrorCount <= 3 or self.sendErrorCount % 10 == 0:
+                    self.logger.error("getNeoData TCP: Socket send error (attempt %d): %s" % (self.sendErrorCount, exc))
                 return ""
-            if dataj != None:
+            if dataj is not None:
                 datak = re.sub(b'[^\s!-~]', b'', dataj)   #Filter extraneous characters which cause json decode to fail
-                data = json.loads(datak)
+                try:
+                    data = json.loads(datak)
+                except (json.JSONDecodeError, ValueError) as exc:
+                    self.logger.error("getNeoData TCP: JSON parse error: %s" % exc)
+                    if self.logComms:
+                        self.logger.error("Raw response: %s" % datak[:500])
+                    return ""
                 self.connectErrorCount = 0
                 self.sendErrorCount = 0
                 if "error" in data:
@@ -720,14 +727,22 @@ class Plugin(indigo.PluginBase):
 
     def ntpOn(self):
         update = self.getNeoData("\"NTP_ON\":0")
+        if not update or "result" not in update:
+            self.logger.error("NTP_ON command failed")
         self.sleep(1)
         update = self.getNeoData("\"DST_ON\":0")
+        if not update or "result" not in update:
+            self.logger.error("DST_ON command failed")
 
-        
+
     def ntpOff(self):
         update = self.getNeoData("\"NTP_OFF\":0")
+        if not update or "result" not in update:
+            self.logger.error("NTP_OFF command failed")
         self.sleep(1)
         update = self.getNeoData("\"DST_OFF\":0")
+        if not update or "result" not in update:
+            self.logger.error("DST_OFF command failed")
         
     
     ########################################
@@ -748,13 +763,15 @@ class Plugin(indigo.PluginBase):
                 self.neohubIP = foundIp
                 self.pluginPrefs["neohubIP"] = foundIp
                 self.savePluginPrefs()
-                self.logger.info(f"NeoHub found at {foundIp} (device: {deviceId})")
+                self.logger.info("NeoHub found at %s (device: %s)" % (foundIp, deviceId))
             else:
                 self.logger.warning("NeoHub responded but no IP in response")
         except socket.timeout:
             self.logger.warning("No NeoHub found on network (timed out)")
+        except json.JSONDecodeError as exc:
+            self.logger.error("HubSeek: received non-JSON response from hub: %s" % exc)
         except Exception as exc:
-            self.logger.error(f"HubSeek error: {exc}")
+            self.logger.error("HubSeek error: %s" % exc)
         finally:
             sock.close()
 
@@ -831,20 +848,20 @@ class Plugin(indigo.PluginBase):
         device = indigo.devices[pluginAction.deviceId].name
         if device:
             minutes = pluginAction.props.get("boostMinutes", "30")
-            update = self.getNeoData(f'"TIMER_HOLD_ON":[{minutes}, "{device}"]')
+            update = self.getNeoData("\"TIMER_HOLD_ON\":[%s, \"%s\"]" % (minutes, device))
             if update and "result" in update:
-                self.logger.info(f"{device} timer boost on for {minutes} minutes")
+                self.logger.info("%s timer boost on for %s minutes" % (device, minutes))
             else:
-                self.logger.error(f"{device} timer boost command failed")
+                self.logger.error("%s timer boost command failed" % device)
 
     def timerBoostOff(self, pluginAction):
         device = indigo.devices[pluginAction.deviceId].name
         if device:
-            update = self.getNeoData(f'"TIMER_HOLD_ON":[0, "{device}"]')
+            update = self.getNeoData("\"TIMER_HOLD_ON\":[0, \"%s\"]" % device)
             if update and "result" in update:
-                self.logger.info(f"{device} timer boost cancelled")
+                self.logger.info("%s timer boost cancelled" % device)
             else:
-                self.logger.error(f"{device} cancel timer boost failed")
+                self.logger.error("%s cancel timer boost failed" % device)
 
     def setHoliday(self, pluginAction):
         endDateStr = pluginAction.props.get("holidayEndDate", "")
@@ -962,12 +979,18 @@ class Plugin(indigo.PluginBase):
     def actionControlDevice(self, action, dev):
         if action.deviceAction == indigo.kDeviceAction.TurnOn:
             resDict = self.getNeoData("\"TIMER_ON\":[\""+dev.name+"\"]")
-            dev.updateStateOnServer("onOffState", True)
-            dev.updateStateImageOnServer(indigo.kStateImageSel.PowerOn)
+            if resDict and "result" in resDict:
+                dev.updateStateOnServer("onOffState", True)
+                dev.updateStateImageOnServer(indigo.kStateImageSel.PowerOn)
+            else:
+                self.logger.error("%s turn on command failed" % dev.name)
         elif action.deviceAction == indigo.kDeviceAction.TurnOff:
             resDict = self.getNeoData("\"TIMER_OFF\":[\""+dev.name+"\"]")
-            dev.updateStateOnServer("onOffState", False)
-            dev.updateStateImageOnServer(indigo.kStateImageSel.PowerOff)
+            if resDict and "result" in resDict:
+                dev.updateStateOnServer("onOffState", False)
+                dev.updateStateImageOnServer(indigo.kStateImageSel.PowerOff)
+            else:
+                self.logger.error("%s turn off command failed" % dev.name)
         else:
             self.logger.error("This action is not currently supported")
             
@@ -1022,7 +1045,10 @@ class Plugin(indigo.PluginBase):
                 zilch = "0"
                 resDict = self.getNeoData("\"HOLD\":[{\"temp\":"+holdTemp+", \"id\":"+"\"Off\""+", \"hours\":"+zilch+", \"minutes\":"+zilch+"}, \""+dev.name+"\"]")
                 resDict = self.getNeoData("\"FROST_ON\":[\""+dev.name+"\"]")
-            dev.updateStateOnServer("hvacOperationMode", newMode)
+            if resDict and "result" in resDict:
+                dev.updateStateOnServer("hvacOperationMode", newMode)
+            else:
+                self.logger.error("%s SetHvacMode command failed" % dev.name)
             
         elif action.thermostatAction in [indigo.kThermostatAction.RequestStatusAll, indigo.kThermostatAction.RequestMode,
             indigo.kThermostatAction.RequestEquipmentState, indigo.kThermostatAction.RequestTemperatures, indigo.kThermostatAction.RequestHumidities,
@@ -1030,7 +1056,7 @@ class Plugin(indigo.PluginBase):
             self.logger.info("Status automatically updated every 30 seconds")
         
         elif (action.thermostatAction == indigo.kThermostatAction.DecreaseCoolSetpoint) or (action.thermostatAction == indigo.kThermostatAction.IncreaseCoolSetpoint):
-            pass
+            self.logger.debug("Cool setpoint change ignored — Heatmiser devices do not support cooling")
             
         else:
             self.logger.error("Action %s is not currently supported" % action.thermostatAction)
