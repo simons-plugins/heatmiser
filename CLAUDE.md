@@ -13,6 +13,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Integrates Heatmiser Neo heating system with Indigo home automation via the Neohub central controller.
 
+## Versioning & Release
+
+### Version bump is required for every PR
+
+The `PluginVersion` in `HeatmiserNeo.IndigoPlugin/Contents/Info.plist` must be bumped in every PR. CI runs a version-check that fails if the version already exists as a git tag. **Do not merge with failing checks.**
+
+Version format: `YYYY.R.patch` (e.g. `2026.0.2`). Bump the patch for fixes/docs, minor for features.
+
+On merge to main, the `create-release` workflow automatically creates a GitHub release with a `.zip` bundle of the plugin.
+
+### PR checklist
+
+1. Bump `PluginVersion` in `Info.plist`
+2. Push and create PR
+3. Wait for version-check CI to pass
+4. Merge only after all checks are green
+
 ## Architecture
 
 ### Communication Protocol
