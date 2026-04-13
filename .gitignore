@@ -1,2 +1,7 @@
 Heatmiser API docs.pdf
 Heatmiser-API-Reference.md
+.pytest_cache/
+__pycache__/
+*.pyc
+.coverage
+htmlcov/
