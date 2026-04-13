@@ -960,6 +960,22 @@ class Plugin(indigo.PluginBase):
         else:
             self.logger.error("%s identify command failed" % device)
 
+    def getHoursRun(self, pluginAction):
+        device = indigo.devices[pluginAction.deviceId].name
+        update = self.getNeoData('"GET_HOURSRUN":"%s"' % device)
+        if update:
+            self.logger.info("%s hours run: %s" % (device, json.dumps(update)))
+        else:
+            self.logger.error("%s get hours run command failed" % device)
+
+    def getTempLog(self, pluginAction):
+        device = indigo.devices[pluginAction.deviceId].name
+        update = self.getNeoData('"GET_TEMPLOG":["%s"]' % device)
+        if update:
+            self.logger.info("%s temp log: %s" % (device, json.dumps(update)))
+        else:
+            self.logger.error("%s get temp log command failed" % device)
+
     def changeIp(self, action):
         oldIP = self.neohubIP
         newIp = action.props.get("newIp", "")
