@@ -583,7 +583,7 @@ class Plugin(indigo.PluginBase):
                     self.logger.info("--> %s" % cmdPhrase)
                 sock.send(cmdPhrase+b"\0")
                 dataj = sock.recv(4096)
-                while ((b"GET_LIVE_DATA" in cmdPhrase or b"INFO" in cmdPhrase) and (b"}]}" not in dataj[len(dataj)-5:len(dataj)-1])) or ((b"GET_ENGINEERS" in cmdPhrase or b"ENGINEERS_DATA" in cmdPhrase) and (b"}}" not in dataj[len(dataj)-4:len(dataj)-1])):
+                while ((b"GET_LIVE_DATA" in cmdPhrase or b"INFO" in cmdPhrase) and (b"}]}" not in dataj[len(dataj)-5:len(dataj)-1])) or ((b"GET_ENGINEERS" in cmdPhrase or b"ENGINEERS_DATA" in cmdPhrase or b"GET_HOURSRUN" in cmdPhrase or b"GET_TEMPLOG" in cmdPhrase) and (b"}}" not in dataj[len(dataj)-4:len(dataj)-1])):
                     chunk = sock.recv(4096)
                     if not chunk:
                         raise ConnectionError("NeoHub connection closed unexpectedly")
@@ -959,6 +959,22 @@ class Plugin(indigo.PluginBase):
             self.logger.info("%s identify LED flashing" % device)
         else:
             self.logger.error("%s identify command failed" % device)
+
+    def getHoursRun(self, pluginAction):
+        device = indigo.devices[pluginAction.deviceId].name
+        update = self.getNeoData('"GET_HOURSRUN":"%s"' % device)
+        if isinstance(update, dict) and update:
+            self.logger.info("%s hours run: %s" % (device, json.dumps(update)))
+        else:
+            self.logger.error("%s get hours run command failed (response: %r)" % (device, update))
+
+    def getTempLog(self, pluginAction):
+        device = indigo.devices[pluginAction.deviceId].name
+        update = self.getNeoData('"GET_TEMPLOG":["%s"]' % device)
+        if isinstance(update, dict) and update:
+            self.logger.info("%s temp log: %s" % (device, json.dumps(update)))
+        else:
+            self.logger.error("%s get temp log command failed (response: %r)" % (device, update))
 
     def changeIp(self, action):
         oldIP = self.neohubIP

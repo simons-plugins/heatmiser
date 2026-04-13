@@ -184,4 +184,22 @@
         <Name>Identify Device (Flash LED)</Name>
         <CallbackMethod>identifyDevice</CallbackMethod>
     </Action>
+    <Action id="getHoursRun" deviceFilter="self.heatmiserNeostat">
+        <Name>Get Hours Run (last 7 days)</Name>
+        <CallbackMethod>getHoursRun</CallbackMethod>
+        <ConfigUI>
+            <Field id="getHoursRunLabel" type="label">
+                <Label>Fetches the number of hours the output was on per day for the last 7 days. Result is logged to the Indigo Event Log.</Label>
+            </Field>
+        </ConfigUI>
+    </Action>
+    <Action id="getTempLog" deviceFilter="self.heatmiserNeostat">
+        <Name>Get Temperature Log (last 7 days)</Name>
+        <CallbackMethod>getTempLog</CallbackMethod>
+        <ConfigUI>
+            <Field id="getTempLogLabel" type="label">
+                <Label>Fetches temperature readings for the last 7 days in 15-minute intervals. Result is logged to the Indigo Event Log.</Label>
+            </Field>
+        </ConfigUI>
+    </Action>
 </Actions>
