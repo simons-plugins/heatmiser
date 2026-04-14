@@ -760,9 +760,12 @@ class Plugin(indigo.PluginBase):
             foundIp = response.get("ip", "")
             deviceId = response.get("device_id", "").strip()
             if foundIp:
+                ipChanged = foundIp != self.neohubIP
                 self.neohubIP = foundIp
                 self.pluginPrefs["neohubIP"] = foundIp
                 self.savePluginPrefs()
+                if ipChanged:
+                    self._close_wss()
                 self.logger.info("NeoHub found at %s (device: %s)" % (foundIp, deviceId))
             else:
                 self.logger.warning("NeoHub responded but no IP in response")
@@ -982,6 +985,7 @@ class Plugin(indigo.PluginBase):
         if newIp != "":
             self.neohubIP = newIp
             if self.neohubIP != oldIP:
+                self._close_wss()
                 self.logger.info("Neohub IP address is now %s" % self.neohubIP)
         else:
             self.logger.error("Invalid IP address supplied")
