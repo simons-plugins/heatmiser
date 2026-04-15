@@ -57,7 +57,6 @@ class Plugin(indigo.PluginBase):
         self.commsEnabled = True
         self.connectErrorCount = 0
         self.sendErrorCount = 0
-        self.neoDevice = None
         self._wss = None
         self._wss_lock = threading.Lock()
         self._command_id = 0
@@ -306,10 +305,49 @@ class Plugin(indigo.PluginBase):
                                 break
                 if device != None:
                     self.updateStatState(update, stat, device)
-                    if stat == 0:
-                        self.neoDevice = device
-    
-            
+
+    def _hubHostDevice(self):
+        """Return the live device that owns hub-level states.
+
+        Hub-level info (firmware, DST, NTP, program format) is written
+        onto whichever active, non-SUPERSEDED device currently sits at
+        address 0. We re-resolve per call rather than caching, so the
+        host device is always the current one after any rediscovery or
+        SUPERSEDED replacement.
+
+        Non-numeric addresses are skipped silently — all heatmiser
+        device types use numeric array-index addresses, so any non-int
+        address is a plugin devices.xml misconfiguration, not something
+        this helper should care about.
+        """
+        host = None
+        duplicates = []
+        for dev in indigo.devices.iter("self"):
+            if "SUPERSEDED" in dev.name:
+                continue
+            try:
+                if int(dev.address) != 0:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            if host is None:
+                host = dev
+            else:
+                duplicates.append(dev)
+
+        if duplicates:
+            # Multiple live devices claim address 0 — that's a rediscovery
+            # inconsistency and exactly the class of bug the old cached
+            # self.neoDevice attribute made silent. Log it loudly.
+            names = ", ".join([host.name] + [d.name for d in duplicates])
+            self.logger.warning(
+                "Multiple devices have address 0 (%s). Using '%s'; "
+                "rename one with SUPERSEDED to silence this warning."
+                % (names, host.name)
+            )
+        return host
+
+
     def updateStatState(self, neoRep, index, indigoDevice):
         devData = neoRep["devices"][index]
         # Read device type from pluginProps (stored during createDevices)
@@ -656,29 +694,32 @@ class Plugin(indigo.PluginBase):
             
     def updateDCB(self):
         update = self.getNeoData("\"GET_SYSTEM\":0" if self.neohubGen2 else "\"READ_DCB\":100")
-        if update != "":
-            self.logger.debug("GET_SYSTEM keys: %s" % list(update.keys()))
-        if update != "" and self.neoDevice is not None:
-            self.neoDevice.updateStateOnServer(key="HubFirmwareVersion", value=str(update.get("HUB_VERSION", update.get("Firmware version", "unknown"))))
-            self.neoDevice.updateStateOnServer(key="DST_Auto", value=str(update.get("DST_AUTO", update.get("DSTAUTO", ""))))
-            self.neoDevice.updateStateOnServer(key="DST_On", value=str(update.get("DST_ON", update.get("DSTON", ""))))
-            self.neoDevice.updateStateOnServer(key="NTP_Status", value=str(update.get("NTP_ON", update.get("NTP", ""))))
-            self.neoDevice.updateStateOnServer(key="Units", value="deg"+str(update.get("CORF", "")))
-            pfi = update.get("FORMAT", update.get("PROGFORMAT", 0))
-            pfiString = "Unknown"
-            if pfi == 0:
-                pfiString = "Non-programmable"
-            elif pfi == 1:
-                pfiString = "24 hours fixed"
-            elif pfi == 2:
-                pfiString = "5day/2day"
-            elif pfi == 3:
-                pfiString = "Illegal"
-            elif pfi == 4:
-                pfiString = "7day"
-            else:
-                pfiString = str(pfi)
-            self.neoDevice.updateStateOnServer(key="Prog_Format", value=pfiString)
+        if update == "":
+            return
+        self.logger.debug("GET_SYSTEM keys: %s" % list(update.keys()))
+        hubDevice = self._hubHostDevice()
+        if hubDevice is None:
+            return
+        hubDevice.updateStateOnServer(key="HubFirmwareVersion", value=str(update.get("HUB_VERSION", update.get("Firmware version", "unknown"))))
+        hubDevice.updateStateOnServer(key="DST_Auto", value=str(update.get("DST_AUTO", update.get("DSTAUTO", ""))))
+        hubDevice.updateStateOnServer(key="DST_On", value=str(update.get("DST_ON", update.get("DSTON", ""))))
+        hubDevice.updateStateOnServer(key="NTP_Status", value=str(update.get("NTP_ON", update.get("NTP", ""))))
+        hubDevice.updateStateOnServer(key="Units", value="deg"+str(update.get("CORF", "")))
+        pfi = update.get("FORMAT", update.get("PROGFORMAT", 0))
+        pfiString = "Unknown"
+        if pfi == 0:
+            pfiString = "Non-programmable"
+        elif pfi == 1:
+            pfiString = "24 hours fixed"
+        elif pfi == 2:
+            pfiString = "5day/2day"
+        elif pfi == 3:
+            pfiString = "Illegal"
+        elif pfi == 4:
+            pfiString = "7day"
+        else:
+            pfiString = str(pfi)
+        hubDevice.updateStateOnServer(key="Prog_Format", value=pfiString)
             
 
     def checkEng(self):
