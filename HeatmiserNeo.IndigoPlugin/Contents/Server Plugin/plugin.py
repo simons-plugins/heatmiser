@@ -760,9 +760,16 @@ class Plugin(indigo.PluginBase):
             foundIp = response.get("ip", "")
             deviceId = response.get("device_id", "").strip()
             if foundIp:
-                self.neohubIP = foundIp
-                self.pluginPrefs["neohubIP"] = foundIp
-                self.savePluginPrefs()
+                ipChanged = foundIp != self.neohubIP
+                # Close the persistent WSS first, then swap in the new IP.
+                # Doing it in the opposite order leaves a brief window in
+                # which another thread could dispatch a command against
+                # the new IP while the old socket is still being torn down.
+                if ipChanged:
+                    self._close_wss()
+                    self.neohubIP = foundIp
+                    self.pluginPrefs["neohubIP"] = foundIp
+                    self.savePluginPrefs()
                 self.logger.info("NeoHub found at %s (device: %s)" % (foundIp, deviceId))
             else:
                 self.logger.warning("NeoHub responded but no IP in response")
@@ -979,12 +986,15 @@ class Plugin(indigo.PluginBase):
     def changeIp(self, action):
         oldIP = self.neohubIP
         newIp = action.props.get("newIp", "")
-        if newIp != "":
-            self.neohubIP = newIp
-            if self.neohubIP != oldIP:
-                self.logger.info("Neohub IP address is now %s" % self.neohubIP)
-        else:
+        if newIp == "":
             self.logger.error("Invalid IP address supplied")
+            return
+        if newIp != oldIP:
+            # Close-before-mutate: tear down the old socket first so a
+            # concurrent command can't land on the new IP mid-teardown.
+            self._close_wss()
+            self.neohubIP = newIp
+            self.logger.info("Neohub IP address is now %s" % self.neohubIP)
                 
 
 
