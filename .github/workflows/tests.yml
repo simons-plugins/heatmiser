@@ -1,0 +1,29 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # The plugin itself has no runtime deps to install in CI —
+          # tests/conftest.py stubs the `indigo` module before any
+          # plugin import so we only need the test framework itself.
+          # Versions pinned for reproducible CI.
+          pip install 'pytest==8.3.3' 'pytest-mock==3.14.0'
+
+      - name: Run pytest
+        run: pytest
