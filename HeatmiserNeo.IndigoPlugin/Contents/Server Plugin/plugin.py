@@ -57,7 +57,6 @@ class Plugin(indigo.PluginBase):
         self.commsEnabled = True
         self.connectErrorCount = 0
         self.sendErrorCount = 0
-        self._wss = None
         self._wss_lock = threading.Lock()
         self._command_id = 0
         self.timeUpdateRequired = None
@@ -100,7 +99,6 @@ class Plugin(indigo.PluginBase):
     def shutdown(self):
         self.logger.info("Stopping Heatmiser Neo plugin")
         self.commsEnabled = False
-        self._close_wss()
 
         
     ########################################
@@ -169,9 +167,7 @@ class Plugin(indigo.PluginBase):
             self.neohubGen2 = True if self.connectionMode == "wss" else self._coerce_bool(valuesDict.get("neohubGen2", True))
             oldToken = self.neohubToken
             self.neohubToken = valuesDict.get("neohubToken", "").strip()
-            needs_reconnect = False
             if self.connectionMode != oldMode or self.neohubToken != oldToken:
-                needs_reconnect = True
                 if self.connectionMode == "wss" and self.neohubToken:
                     self.logger.info("Using WSS connection (port 4243)")
                 else:
@@ -180,9 +176,6 @@ class Plugin(indigo.PluginBase):
             self.neohubIP = valuesDict.get("neohubIP")
             if self.neohubIP != oldIP:
                 self.logger.info("Neohub IP address is now %s" % self.neohubIP)
-                needs_reconnect = True
-            if needs_reconnect:
-                self._close_wss()
 
                         
     ########################################
@@ -505,33 +498,19 @@ class Plugin(indigo.PluginBase):
                 self._wss_fallback_warned = True
             return self._get_neo_data_tcp(cmdPhrase)
 
-    def _close_wss(self):
-        with self._wss_lock:
-            if self._wss is not None:
-                try:
-                    self._wss.close()
-                except Exception as exc:
-                    self.logger.debug("WSS close error (ignored): %s" % exc)
-                self._wss = None
-
-    def _ensure_wss(self):
-        """Return existing WSS connection or create new one. Must be called under _wss_lock."""
-        if self._wss is not None:
-            return self._wss
-        ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        ssl_context.check_hostname = False
-        ssl_context.verify_mode = ssl.CERT_NONE  # NeoHub uses self-signed cert on local network
-        uri = "wss://%s:4243" % self.neohubIP
-        self._wss = ws_connect(uri, ssl=ssl_context, open_timeout=8)
-        return self._wss
-
     def _send_wss(self, cmdPhrase):
-        """Send command via WSS and return parsed response.
+        """Send command via WSS over a fresh connection and return parsed response.
 
         The Heatmiser WSS protocol uses a two-layer JSON envelope: the outer
         message has message_type + message fields, the inner payload contains
         the API token and COMMANDS array. The hub may send async messages
         between command/response pairs, so we filter for hm_set_command_response.
+
+        A new connection is opened per call (and closed in finally). An earlier
+        persistent-connection design got into a state where the websockets
+        library raised ProtocolError("incorrect masking") under Python 3.13 /
+        websockets 15.x — opening fresh per call avoids that class of bug
+        entirely at the cost of one TLS handshake per poll.
         """
         with self._wss_lock:
             self._command_id += 1
@@ -545,35 +524,45 @@ class Plugin(indigo.PluginBase):
                 "message_type": "hm_get_command_queue",
                 "message": inner_command
             })
-            ws = self._ensure_wss()
-            ws.send(message)
-            if self.logComms:
-                log_msg = message.replace(self.neohubToken, "***") if self.neohubToken else message
-                self.logger.info("WSS --> %s" % log_msg)
-            for _ in range(5):
-                response_text = ws.recv(timeout=10)
+            ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ssl_context.check_hostname = False
+            ssl_context.verify_mode = ssl.CERT_NONE  # NeoHub uses self-signed cert on local network
+            uri = "wss://%s:4243" % self.neohubIP
+            ws = ws_connect(uri, ssl=ssl_context, open_timeout=8)
+            try:
+                ws.send(message)
                 if self.logComms:
-                    self.logger.info("WSS <-- %s" % response_text)
-                try:
-                    response = json.loads(response_text)
-                except json.JSONDecodeError as exc:
-                    self.logger.error("WSS: failed to parse response: %s" % exc)
-                    continue
-                msg_type = response.get("message_type", "unknown")
-                if msg_type == "hm_set_command_response":
+                    log_msg = message.replace(self.neohubToken, "***") if self.neohubToken else message
+                    self.logger.info("WSS --> %s" % log_msg)
+                for _ in range(5):
+                    response_text = ws.recv(timeout=10)
+                    if self.logComms:
+                        self.logger.info("WSS <-- %s" % response_text)
                     try:
-                        return json.loads(response["response"])
-                    except (json.JSONDecodeError, KeyError) as exc:
-                        self.logger.error("WSS: failed to parse command response: %s" % exc)
-                        return ""
-                else:
-                    self.logger.debug("WSS: skipping message type '%s'" % msg_type)
-            self.logger.warning("No command response received after 5 messages")
-            return ""
+                        response = json.loads(response_text)
+                    except json.JSONDecodeError as exc:
+                        self.logger.error("WSS: failed to parse response: %s" % exc)
+                        continue
+                    msg_type = response.get("message_type", "unknown")
+                    if msg_type == "hm_set_command_response":
+                        try:
+                            return json.loads(response["response"])
+                        except (json.JSONDecodeError, KeyError) as exc:
+                            self.logger.error("WSS: failed to parse command response: %s" % exc)
+                            return ""
+                    else:
+                        self.logger.debug("WSS: skipping message type '%s'" % msg_type)
+                self.logger.warning("No command response received after 5 messages")
+                return ""
+            finally:
+                try:
+                    ws.close()
+                except Exception as exc:
+                    self.logger.debug("WSS close error (ignored): %s" % exc)
 
     def _get_neo_data_wss(self, cmdPhrase):
-        """WSS equivalent of _get_neo_data_tcp. On connection failure, closes
-        the persistent socket so the next call reconnects via _ensure_wss."""
+        """WSS equivalent of _get_neo_data_tcp. Each call opens its own
+        connection inside _send_wss and closes it in finally."""
         try:
             result = self._send_wss(cmdPhrase)
             self.connectErrorCount = 0
@@ -584,13 +573,11 @@ class Plugin(indigo.PluginBase):
                 return ""
             return result
         except (ConnectionClosed, ConnectionError, TimeoutError, OSError) as exc:
-            self._close_wss()
             self.connectErrorCount += 1
             if self.connectErrorCount <= 3 or self.connectErrorCount % 10 == 0:
                 self.logger.error("getNeoData WSS: connection error #%d (%s)" % (self.connectErrorCount, exc))
             return ""
         except Exception as exc:
-            self._close_wss()
             self.sendErrorCount += 1
             if self.sendErrorCount <= 3 or self.sendErrorCount % 10 == 0:
                 self.logger.error("getNeoData WSS: unexpected error #%d [%s]: %s" % (self.sendErrorCount, type(exc).__name__, exc))
@@ -802,12 +789,7 @@ class Plugin(indigo.PluginBase):
             deviceId = response.get("device_id", "").strip()
             if foundIp:
                 ipChanged = foundIp != self.neohubIP
-                # Close the persistent WSS first, then swap in the new IP.
-                # Doing it in the opposite order leaves a brief window in
-                # which another thread could dispatch a command against
-                # the new IP while the old socket is still being torn down.
                 if ipChanged:
-                    self._close_wss()
                     self.neohubIP = foundIp
                     self.pluginPrefs["neohubIP"] = foundIp
                     self.savePluginPrefs()
@@ -1031,9 +1013,6 @@ class Plugin(indigo.PluginBase):
             self.logger.error("Invalid IP address supplied")
             return
         if newIp != oldIP:
-            # Close-before-mutate: tear down the old socket first so a
-            # concurrent command can't land on the new IP mid-teardown.
-            self._close_wss()
             self.neohubIP = newIp
             self.logger.info("Neohub IP address is now %s" % self.neohubIP)
                 
