@@ -40,7 +40,7 @@ The plugin supports two connection modes to the **Neohub** device:
 - **Port**: 4243 (TLS, self-signed cert)
 - **Protocol**: Two-layer JSON envelope over WebSocket. Outer message has `message_type` + `message` fields; inner payload contains API token and `COMMANDS` array with `COMMAND`/`COMMANDID` pairs.
 - **Authentication**: API token (generated in Heatmiser Neo App → Settings → Api Access → Tokens)
-- **Connection**: Persistent WebSocket, thread-safe via `_wss_lock`. Automatically reconnects on failure.
+- **Connection**: Fresh WebSocket opened per command (closed in `finally`). Thread-safe via `_wss_lock`. An earlier persistent-connection design was abandoned after Indigo 2025.2 / Python 3.13 / `websockets` 15.x began raising `ProtocolError("incorrect masking")` on long-lived sockets — the per-call model trades one TLS handshake per poll for immunity to that class of state-desync bug.
 - **Timeout**: 8 seconds for connection, 10 seconds for response
 
 **Legacy TCP (port 4242):**
