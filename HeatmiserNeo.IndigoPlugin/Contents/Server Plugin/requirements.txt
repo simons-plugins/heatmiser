@@ -1,0 +1,1 @@
+websockets>=12.0          # plugin.py imports websockets.sync.client (sync API stable from 12.0+)
