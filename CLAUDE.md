@@ -6,10 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Heatmiser Neo** - Indigo plugin for Heatmiser Neo thermostats and smart plugs
 
-- **Version**: 2023.1.0 (API 3.0 / Python 3)
-- **Bundle ID**: `com.racarter.indigoplugin.heatmiser-neo`
-- **Author**: Alan Carter
-- **Documentation**: https://carter53.wordpress.com/indigo/heatmiser/
+- **Version**: see `PluginVersion` in `Info.plist` (2026.x, API 3.0 / Python 3)
+- **Bundle ID**: `com.racarter.indigoplugin.heatmiser-neo` (kept from the original so it upgrades existing installs in place)
+- **Origin**: Simon Clark's fork of Alan Carter's plugin, imported at 2025.1.1 (March 2026). See git history for changes since.
+- **Original documentation**: https://carter53.wordpress.com/indigo/heatmiser/
 
 Integrates Heatmiser Neo heating system with Indigo home automation via the Neohub central controller.
 
