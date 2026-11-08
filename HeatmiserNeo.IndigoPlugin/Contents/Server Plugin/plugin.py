@@ -65,6 +65,8 @@ class Plugin(indigo.PluginBase):
         self.firstTime = True
         self.responseKeysLogged = False
         self._deviceListStamp = None
+        self._discoveryDone = False
+        self._hubHostZone = None
         self._missingZonesWarned = set()
 
 
@@ -231,10 +233,12 @@ class Plugin(indigo.PluginBase):
 
         neoInfo = self.getNeoData("\"GET_LIVE_DATA\":0" if self.neohubGen2 else "\"INFO\":0")
         if not isinstance(neoInfo, dict) or "devices" not in neoInfo:
-            self.logger.error("Cannot detect devices: no device list in hub response")
+            self.logger.error("Cannot detect devices: no device list in hub response; will retry on the next successful poll")
             return
         self._deviceListStamp = neoInfo.get("TIMESTAMP_DEVICE_LISTS")
+        self._missingZonesWarned = set()
         zones = self._zonesByName(neoInfo)
+        self._hubHostZone = next((z for z, (i, _) in zones.items() if i == 0), None)
 
         # Pass 1: devices that already carry a zoneName claim their zone.
         claimed = {}
@@ -247,6 +251,7 @@ class Plugin(indigo.PluginBase):
             if zoneName not in zones:
                 self.logger.warning("Device '%s' is bound to hub zone '%s', which is no longer on the hub (removed or renamed). "
                                     "It will not be updated. Rename it with SUPERSEDED or delete it." % (dev.name, zoneName))
+                dev.setErrorStateOnServer("ZONE NOT ON HUB")
                 continue
             if zoneName in claimed:
                 self.logger.warning("Devices '%s' and '%s' both claim hub zone '%s'; using '%s'. "
@@ -256,6 +261,7 @@ class Plugin(indigo.PluginBase):
 
         # Pass 2: migrate pre-zoneName devices by Indigo name, never by position.
         # A device renamed in Indigo before this version cannot be matched safely, so it is left alone.
+        unmatchedLegacy = []
         for dev in legacy:
             zoneName = self._legacyZoneName(dev.name)
             if zoneName in zones and zoneName not in claimed:
@@ -265,48 +271,73 @@ class Plugin(indigo.PluginBase):
                 claimed[zoneName] = dev
                 self.logger.info("Bound device '%s' to hub zone '%s'" % (dev.name, zoneName))
             else:
-                unclaimed = ", ".join(z for z in zones if z not in claimed) or "none"
+                unmatchedLegacy.append(dev)
+        if unmatchedLegacy:
+            # Creating a device for an unclaimed zone would take that zone's name, which blocks the
+            # rename-and-restart fix below and orphans the user's device for good. Hold creation.
+            unclaimed = ", ".join(z for z in zones if z not in claimed) or "none"
+            for dev in unmatchedLegacy:
+                dev.setErrorStateOnServer("NO HUB ZONE")
                 self.logger.warning("Device '%s' has no stored hub zone and no unclaimed hub zone matches its name. It will not be updated. "
                                     "Rename it in Indigo to its hub zone name (unclaimed zones: %s), restart the plugin, then rename it back."
                                     % (dev.name, unclaimed))
+            self.logger.warning("Not creating devices for unclaimed hub zones until the %d device(s) above are resolved" % len(unmatchedLegacy))
 
         # Pass 3: every hub zone gets a device of the right type, with current props and position.
         for zoneName, (index, devData) in zones.items():
-            deviceType = deviceTypeMap.get(zoneName, devData.get("DEVICE_TYPE", 0)) if self.neohubGen2 else devData.get("DEVICE_TYPE", 0)
-            if deviceType == 14:
-                expectedTypeId = "heatmiserNeoSensor"
-            elif deviceType == 6:
-                expectedTypeId = "heatmiserNeoplug"
-            elif devData.get("TIMECLOCK", False):
-                expectedTypeId = "heatmiserNeoTimeclock"
-            else:
-                expectedTypeId = "heatmiserNeostat"
-            device = claimed.get(zoneName)
-            if device is not None and device.deviceTypeId != expectedTypeId:
-                # Wrong device type — supersede and recreate
-                self.logger.info("Upgrading %s from %s to %s" % (device.name, device.deviceTypeId, expectedTypeId))
-                device.name = device.name + " SUPERSEDED"
-                device.replaceOnServer()
-                device = None
-            if device is None:
-                self.logger.info("Creating Heatmiser device for %s (type: %s)" % (zoneName, expectedTypeId))
-                device = indigo.device.create(protocol=indigo.kProtocol.Plugin,
-                    address=index,
-                    name=zoneName,
-                    pluginId="com.racarter.indigoplugin.heatmiser-neo",
-                    deviceTypeId=expectedTypeId,
-                    props={"neoDeviceType": str(deviceType), "zoneName": zoneName})
-            else:
-                localPropsCopy = device.pluginProps
+            try:
+                self._syncZoneDevice(neoInfo, zoneName, index, devData, claimed.get(zoneName), deviceTypeMap, bool(unmatchedLegacy))
+            except Exception:
+                self.logger.exception("Discovery failed for hub zone '%s'; continuing with the others" % zoneName)
+        self._discoveryDone = True
+
+    def _syncZoneDevice(self, neoInfo, zoneName, index, devData, device, deviceTypeMap, holdCreation):
+        """Create or refresh the Indigo device for one hub zone and push its readings."""
+        deviceType = deviceTypeMap.get(zoneName, devData.get("DEVICE_TYPE", 0)) if self.neohubGen2 else devData.get("DEVICE_TYPE", 0)
+        if not deviceType and device is not None:
+            # Type unknown this pass (GET_ENGINEERS blip, or hub reports 0 for an offline device):
+            # trust what we stored rather than treat the device as a mis-typed thermostat.
+            deviceType = int(device.pluginProps.get("neoDeviceType", 0) or 0)
+        if deviceType == 14:
+            expectedTypeId = "heatmiserNeoSensor"
+        elif deviceType == 6:
+            expectedTypeId = "heatmiserNeoplug"
+        elif devData.get("TIMECLOCK", False):
+            expectedTypeId = "heatmiserNeoTimeclock"
+        else:
+            expectedTypeId = "heatmiserNeostat"
+        if device is not None and deviceType and device.deviceTypeId != expectedTypeId:
+            # Wrong device type — supersede and recreate
+            self.logger.info("Upgrading %s from %s to %s" % (device.name, device.deviceTypeId, expectedTypeId))
+            device.name = device.name + " SUPERSEDED"
+            device.replaceOnServer()
+            device = None
+        if device is None:
+            if holdCreation:
+                return
+            self.logger.info("Creating Heatmiser device for %s (type: %s)" % (zoneName, expectedTypeId))
+            props = {"neoDeviceType": str(deviceType), "zoneName": zoneName}
+            try:
+                device = indigo.device.create(protocol=indigo.kProtocol.Plugin, address=index, name=zoneName,
+                    pluginId="com.racarter.indigoplugin.heatmiser-neo", deviceTypeId=expectedTypeId, props=props)
+            except Exception as exc:
+                # Hub zones are room names, so an unrelated Indigo device may already own the name.
+                fallback = zoneName + " Heatmiser"
+                self.logger.warning("Could not create device '%s' (%s); creating it as '%s'" % (zoneName, exc, fallback))
+                device = indigo.device.create(protocol=indigo.kProtocol.Plugin, address=index, name=fallback,
+                    pluginId="com.racarter.indigoplugin.heatmiser-neo", deviceTypeId=expectedTypeId, props=props)
+        else:
+            localPropsCopy = device.pluginProps
+            if deviceType:
                 localPropsCopy["neoDeviceType"] = str(deviceType)
-                localPropsCopy["zoneName"] = zoneName
-                if expectedTypeId == "heatmiserNeostat":
-                    localPropsCopy["SupportsCoolSetpoint"] = False
-                    localPropsCopy["SupportsHvacFanMode"] = False
-                # address is display-only now; Indigo migrates pluginProps["address"] to dev.address
-                localPropsCopy["address"] = str(index)
-                device.replacePluginPropsOnServer(localPropsCopy)
-            self.updateStatState(neoInfo, index, device)
+            localPropsCopy["zoneName"] = zoneName
+            if expectedTypeId == "heatmiserNeostat":
+                localPropsCopy["SupportsCoolSetpoint"] = False
+                localPropsCopy["SupportsHvacFanMode"] = False
+            # address is display-only now; Indigo migrates pluginProps["address"] to dev.address
+            localPropsCopy["address"] = str(index)
+            device.replacePluginPropsOnServer(localPropsCopy)
+        self.updateStatState(neoInfo, index, device)
 
 
     def updateReadings(self):
@@ -322,36 +353,53 @@ class Plugin(indigo.PluginBase):
                 self.logger.error("updateReadings: response missing 'devices' key; top-level keys: %s" % list(update.keys()))
                 return
             stamp = update.get("TIMESTAMP_DEVICE_LISTS")
-            if stamp is not None and stamp != getattr(self, "_deviceListStamp", None):
+            if not self._discoveryDone:
+                # Startup discovery failed (hub unreachable); every device is still unbound. Gen 1 has no stamp.
+                self.logger.info("Device discovery has not completed yet; running it now")
+                self.createDevices()
+                return
+            if stamp is not None and stamp != self._deviceListStamp:
                 self.logger.info("Hub device list changed; rediscovering devices")
                 self.createDevices()
                 return
             zones = self._zonesByName(update)
+            seen = set()
             for dev in self._liveDevices():
                 zoneName = dev.pluginProps.get("zoneName")
                 if not zoneName:
-                    continue  # pre-migration device; createDevices has already warned
+                    continue  # pre-migration device; createDevices has already warned and set its error state
+                if zoneName in seen:
+                    continue  # duplicate claim; createDevices warned and the first device wins
+                seen.add(zoneName)
                 if zoneName not in zones:
                     if zoneName not in self._missingZonesWarned:
                         self._missingZonesWarned.add(zoneName)
                         self.logger.warning("Device '%s': hub zone '%s' is not in the hub's device list; not updating it" % (dev.name, zoneName))
+                    dev.setErrorStateOnServer("ZONE NOT ON HUB")
                     continue
+                self._missingZonesWarned.discard(zoneName)
                 self.updateStatState(update, zones[zoneName][0], dev)
 
     def _hubHostDevice(self):
         """Return the live device that owns hub-level states.
 
         Hub-level info (firmware, DST, NTP, program format) is written
-        onto whichever active, non-SUPERSEDED device currently sits at
-        address 0. We re-resolve per call rather than caching, so the
-        host device is always the current one after any rediscovery or
-        SUPERSEDED replacement.
+        onto the device bound to the hub zone at list position 0, as
+        recorded by the last createDevices(). We re-resolve per call
+        rather than caching, so the host device is always the current
+        one after any rediscovery or SUPERSEDED replacement.
 
-        Non-numeric addresses are skipped silently — all heatmiser
+        Fallback (no discovery yet): whichever live device has address
+        0. Non-numeric addresses are skipped silently — all heatmiser
         device types use numeric array-index addresses, so any non-int
         address is a plugin devices.xml misconfiguration, not something
         this helper should care about.
         """
+        hostZone = getattr(self, "_hubHostZone", None)
+        if hostZone:
+            for dev in self._liveDevices():
+                if dev.pluginProps.get("zoneName") == hostZone:
+                    return dev
         host = None
         duplicates = []
         for dev in indigo.devices.iter("self"):

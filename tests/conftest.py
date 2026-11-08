@@ -72,6 +72,8 @@ def plugin():
     p.neoDevice = None
     p.responseKeysLogged = True
     p._deviceListStamp = None
+    p._discoveryDone = True
+    p._hubHostZone = None
     p._missingZonesWarned = set()
     p.getNeoData = MagicMock(return_value={"result": "ok"})
     return p
