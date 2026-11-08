@@ -67,12 +67,14 @@ The plugin runs a continuous monitoring thread ([plugin.py:84-108](HeatmiserNeo.
 
 ### Device Auto-Discovery
 
-On startup, the plugin queries the Neohub for all connected devices ([plugin.py:144-186](HeatmiserNeo.IndigoPlugin/Contents/Server Plugin/plugin.py#L144-L186)):
+On startup (and whenever `TIMESTAMP_DEVICE_LISTS` in `GET_LIVE_DATA` changes), `createDevices()` queries the Neohub for all connected devices:
 
-1. Sends `{"INFO":0}` command to discover devices
-2. Creates Indigo device for each physical device (if not already created)
-3. Uses the device's array index in the Neohub as the Indigo device address
-4. Automatically determines device type and creates appropriate Indigo device
+1. Sends `GET_LIVE_DATA` (Gen 2) or `INFO` (Gen 1) and indexes the result by `ZONE_NAME`
+2. Each Indigo device is bound to its hub zone by the `zoneName` plugin prop — **never by list position**. Removing a stat from the hub shifts every later entry up one slot, and position matching silently fed each device its neighbour's readings (issue #33).
+3. Devices without `zoneName` (created before 2026.1.0) are migrated by Indigo name (allowing a trailing ` Heatmiser`). A device renamed in Indigo before upgrading cannot be matched safely: it is left alone with a warning telling the user to rename it to the hub zone name, restart, and rename back.
+4. Every hub zone with no claiming device gets a new Indigo device of the right type; a device whose zone has left the hub is warned about and not updated.
+5. `address` is display-only and is refreshed to the current list position via `pluginProps["address"]`
+6. Commands (`SET_TEMP`, `HOLD`, `TIMER_ON`, …) and `GET_ENGINEERS` lookups use `zoneName`, so devices can be renamed freely in Indigo.
 
 **Device Naming Restriction**: Device names from Heatmiser must be valid Python identifiers (no spaces, special characters except underscore). The plugin validates this with `isidentifier()` and logs an error if invalid.
 

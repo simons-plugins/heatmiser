@@ -64,6 +64,8 @@ class Plugin(indigo.PluginBase):
         self.engUpdateRequired = None
         self.firstTime = True
         self.responseKeysLogged = False
+        self._deviceListStamp = None
+        self._missingZonesWarned = set()
 
 
     ########################################
@@ -181,6 +183,39 @@ class Plugin(indigo.PluginBase):
     ########################################
     # Heatmiser Neo specific functions
     
+    # Zone-name matching helpers (issue #33)
+    #
+    # Each Indigo device stores the hub's ZONE_NAME in a "zoneName" plugin
+    # prop. That is the key for readings and commands; the Indigo device
+    # name is free to change, and "address" is display-only (refreshed to
+    # the current hub list position on discovery via pluginProps["address"]).
+
+    def _liveDevices(self):
+        return [dev for dev in indigo.devices.iter("self") if "SUPERSEDED" not in dev.name]
+
+    def _zoneName(self, dev):
+        """Hub zone name for a device: the stored prop, else the Indigo name
+        (pre-migration devices)."""
+        return dev.pluginProps.get("zoneName") or dev.name
+
+    def _zonesByName(self, neoInfo):
+        """{ZONE_NAME: (hub list index, device data)} from a live-data response."""
+        zones = {}
+        for index, devData in enumerate(neoInfo.get("devices", [])):
+            name = devData.get("ZONE_NAME", devData.get("device"))
+            if name:
+                zones[name] = (index, devData)
+        return zones
+
+    @staticmethod
+    def _legacyZoneName(indigoName):
+        """Zone name implied by a pre-migration device's Indigo name.
+        Some installs suffixed the hub name with " Heatmiser"."""
+        name = indigoName.strip()
+        if name.endswith(" Heatmiser"):
+            name = name[: -len(" Heatmiser")].rstrip()
+        return name
+
     def createDevices(self):
         self.commsEnabled = True
         deviceTypeMap = {}
@@ -195,81 +230,85 @@ class Plugin(indigo.PluginBase):
                     self.logger.warning("GET_ENGINEERS returned no device type data; keys: %s" % list(engData.keys())[:5])
 
         neoInfo = self.getNeoData("\"GET_LIVE_DATA\":0" if self.neohubGen2 else "\"INFO\":0")
-        try:
-            max_devices = len(neoInfo["devices"])
-        except Exception as exc:
-            self.logger.error("Cannot detect devices: %s" % exc)
-            max_devices = 0
-        for stat in range(0, max_devices):
-            devData = neoInfo["devices"][stat]
-            devName = devData.get("ZONE_NAME", devData.get("device", "unknown"))
-            deviceType = deviceTypeMap.get(devName, devData.get("DEVICE_TYPE", 0)) if self.neohubGen2 else devData.get("DEVICE_TYPE", 0)
-            if deviceType == 14:
-                # This is a wireless air sensor
-                device = None
-                for dev in indigo.devices.iter("self"):
-                    if "SUPERSEDED" not in dev.name:
-                        if int(dev.address) == stat:
-                            device = dev
-                            # Check if existing device has correct type
-                            if device.deviceTypeId != "heatmiserNeoSensor":
-                                self.logger.info("Upgrading sensor device %s to new device type" % device.name)
-                                # Rename old device
-                                device.name = device.name + " SUPERSEDED"
-                                device.replaceOnServer()
-                                device = None
-                if device == None:
-                    self.logger.info("Creating Heatmiser sensor device for %s" % devName)
-                    device = indigo.device.create(protocol=indigo.kProtocol.Plugin,
-                    address=stat,
-                    name=devName,
-                    pluginId="com.racarter.indigoplugin.heatmiser-neo",
-                    deviceTypeId="heatmiserNeoSensor",
-                    props={"neoDeviceType": str(deviceType)})
-                else:
-                    # Ensure device type is stored in pluginProps
-                    localPropsCopy = device.pluginProps
-                    if str(localPropsCopy.get("neoDeviceType", "")) != str(deviceType):
-                        localPropsCopy["neoDeviceType"] = str(deviceType)
-                        device.replacePluginPropsOnServer(localPropsCopy)
-                self.updateStatState(neoInfo, stat, device)
+        if not isinstance(neoInfo, dict) or "devices" not in neoInfo:
+            self.logger.error("Cannot detect devices: no device list in hub response")
+            return
+        self._deviceListStamp = neoInfo.get("TIMESTAMP_DEVICE_LISTS")
+        zones = self._zonesByName(neoInfo)
+
+        # Pass 1: devices that already carry a zoneName claim their zone.
+        claimed = {}
+        legacy = []
+        for dev in self._liveDevices():
+            zoneName = dev.pluginProps.get("zoneName")
+            if not zoneName:
+                legacy.append(dev)
                 continue
-            isTimeclock = devData.get("TIMECLOCK", False)
-            if deviceType == 6:
+            if zoneName not in zones:
+                self.logger.warning("Device '%s' is bound to hub zone '%s', which is no longer on the hub (removed or renamed). "
+                                    "It will not be updated. Rename it with SUPERSEDED or delete it." % (dev.name, zoneName))
+                continue
+            if zoneName in claimed:
+                self.logger.warning("Devices '%s' and '%s' both claim hub zone '%s'; using '%s'. "
+                                    "Rename one with SUPERSEDED." % (claimed[zoneName].name, dev.name, zoneName, claimed[zoneName].name))
+                continue
+            claimed[zoneName] = dev
+
+        # Pass 2: migrate pre-zoneName devices by Indigo name, never by position.
+        # A device renamed in Indigo before this version cannot be matched safely, so it is left alone.
+        for dev in legacy:
+            zoneName = self._legacyZoneName(dev.name)
+            if zoneName in zones and zoneName not in claimed:
+                props = dev.pluginProps
+                props["zoneName"] = zoneName
+                dev.replacePluginPropsOnServer(props)
+                claimed[zoneName] = dev
+                self.logger.info("Bound device '%s' to hub zone '%s'" % (dev.name, zoneName))
+            else:
+                unclaimed = ", ".join(z for z in zones if z not in claimed) or "none"
+                self.logger.warning("Device '%s' has no stored hub zone and no unclaimed hub zone matches its name. It will not be updated. "
+                                    "Rename it in Indigo to its hub zone name (unclaimed zones: %s), restart the plugin, then rename it back."
+                                    % (dev.name, unclaimed))
+
+        # Pass 3: every hub zone gets a device of the right type, with current props and position.
+        for zoneName, (index, devData) in zones.items():
+            deviceType = deviceTypeMap.get(zoneName, devData.get("DEVICE_TYPE", 0)) if self.neohubGen2 else devData.get("DEVICE_TYPE", 0)
+            if deviceType == 14:
+                expectedTypeId = "heatmiserNeoSensor"
+            elif deviceType == 6:
                 expectedTypeId = "heatmiserNeoplug"
-            elif isTimeclock:
+            elif devData.get("TIMECLOCK", False):
                 expectedTypeId = "heatmiserNeoTimeclock"
             else:
                 expectedTypeId = "heatmiserNeostat"
-            device = None
-            for dev in indigo.devices.iter("self"):
-                if "SUPERSEDED" not in dev.name:
-                    if int(dev.address) == stat:
-                        if dev.deviceTypeId == expectedTypeId:
-                            device = dev
-                        else:
-                            # Wrong device type — supersede and recreate
-                            self.logger.info("Upgrading %s from %s to %s" % (dev.name, dev.deviceTypeId, expectedTypeId))
-                            dev.name = dev.name + " SUPERSEDED"
-                            dev.replaceOnServer()
-            if device == None:
-                self.logger.info("Creating Heatmiser device for %s (type: %s)" % (devName, expectedTypeId))
+            device = claimed.get(zoneName)
+            if device is not None and device.deviceTypeId != expectedTypeId:
+                # Wrong device type — supersede and recreate
+                self.logger.info("Upgrading %s from %s to %s" % (device.name, device.deviceTypeId, expectedTypeId))
+                device.name = device.name + " SUPERSEDED"
+                device.replaceOnServer()
+                device = None
+            if device is None:
+                self.logger.info("Creating Heatmiser device for %s (type: %s)" % (zoneName, expectedTypeId))
                 device = indigo.device.create(protocol=indigo.kProtocol.Plugin,
-                    address=stat,
-                    name=devName,
+                    address=index,
+                    name=zoneName,
                     pluginId="com.racarter.indigoplugin.heatmiser-neo",
                     deviceTypeId=expectedTypeId,
-                    props={"neoDeviceType": str(deviceType)})
-            # Store device type and thermostat props
-            localPropsCopy = device.pluginProps
-            localPropsCopy["neoDeviceType"] = str(deviceType)
-            if expectedTypeId == "heatmiserNeostat":
-                localPropsCopy["SupportsCoolSetpoint"] = False
-                localPropsCopy["SupportsHvacFanMode"] = False
-            device.replacePluginPropsOnServer(localPropsCopy)
-            self.updateStatState(neoInfo, stat, device)
+                    props={"neoDeviceType": str(deviceType), "zoneName": zoneName})
+            else:
+                localPropsCopy = device.pluginProps
+                localPropsCopy["neoDeviceType"] = str(deviceType)
+                localPropsCopy["zoneName"] = zoneName
+                if expectedTypeId == "heatmiserNeostat":
+                    localPropsCopy["SupportsCoolSetpoint"] = False
+                    localPropsCopy["SupportsHvacFanMode"] = False
+                # address is display-only now; Indigo migrates pluginProps["address"] to dev.address
+                localPropsCopy["address"] = str(index)
+                device.replacePluginPropsOnServer(localPropsCopy)
+            self.updateStatState(neoInfo, index, device)
 
-        
+
     def updateReadings(self):
         update = self.getNeoData("\"GET_LIVE_DATA\":0" if self.neohubGen2 else "\"INFO\":0")
         if update != "":
@@ -282,22 +321,22 @@ class Plugin(indigo.PluginBase):
             if devices is None:
                 self.logger.error("updateReadings: response missing 'devices' key; top-level keys: %s" % list(update.keys()))
                 return
-            max_devices = len(devices)
-            for stat in range(0, max_devices):
-                device = None
-                for dev in indigo.devices.iter("self"):
-                    if "SUPERSEDED" not in dev.name:
-                        if int(dev.address) == stat:
-                            # Match by Indigo device type (sensor vs thermostat/plug)
-                            neoDeviceType = int(dev.pluginProps.get("neoDeviceType", 0))
-                            if neoDeviceType == 14 and dev.deviceTypeId == "heatmiserNeoSensor":
-                                device = dev
-                                break
-                            elif neoDeviceType != 14 and dev.deviceTypeId != "heatmiserNeoSensor":
-                                device = dev
-                                break
-                if device != None:
-                    self.updateStatState(update, stat, device)
+            stamp = update.get("TIMESTAMP_DEVICE_LISTS")
+            if stamp is not None and stamp != getattr(self, "_deviceListStamp", None):
+                self.logger.info("Hub device list changed; rediscovering devices")
+                self.createDevices()
+                return
+            zones = self._zonesByName(update)
+            for dev in self._liveDevices():
+                zoneName = dev.pluginProps.get("zoneName")
+                if not zoneName:
+                    continue  # pre-migration device; createDevices has already warned
+                if zoneName not in zones:
+                    if zoneName not in self._missingZonesWarned:
+                        self._missingZonesWarned.add(zoneName)
+                        self.logger.warning("Device '%s': hub zone '%s' is not in the hub's device list; not updating it" % (dev.name, zoneName))
+                    continue
+                self.updateStatState(update, zones[zoneName][0], dev)
 
     def _hubHostDevice(self):
         """Return the live device that owns hub-level states.
@@ -736,10 +775,11 @@ class Plugin(indigo.PluginBase):
                 # Skip sensors, neoplugs, and timeclocks — they don't have engineering states
                 if dev.deviceTypeId in ("heatmiserNeoSensor", "heatmiserNeoplug", "heatmiserNeoTimeclock"):
                     continue
-                if dev.name not in update:
+                zoneName = self._zoneName(dev)
+                if zoneName not in update:
                     continue
                 try:
-                    devData = update[dev.name]
+                    devData = update[zoneName]
                     frostTemp = devData.get("FROST_TEMP", devData.get("FROST TEMPERATURE", None))
                     if frostTemp is not None:
                         dev.updateStateOnServer(key="FrostTemp", value=frostTemp)
@@ -827,7 +867,7 @@ class Plugin(indigo.PluginBase):
         if dev.deviceTypeId not in ("heatmiserNeostat", "heatmiserNeoTimeclock"):
             self.logger.warning("setCool: action not supported for device type '%s'" % dev.deviceTypeId)
             return
-        device = dev.name
+        device = self._zoneName(dev)
         if device:
             update = self.getNeoData("\"FROST_ON\":[\""+device+"\"]")
             if update and "result" in update:
@@ -840,7 +880,7 @@ class Plugin(indigo.PluginBase):
         if dev.deviceTypeId not in ("heatmiserNeostat", "heatmiserNeoTimeclock"):
             self.logger.warning("setAuto: action not supported for device type '%s'" % dev.deviceTypeId)
             return
-        device = dev.name
+        device = self._zoneName(dev)
         if device:
             zilch = "0"
             holdTemp = "20"
@@ -852,7 +892,7 @@ class Plugin(indigo.PluginBase):
                 self.logger.error("%s Auto command failed" % device)
  
     def setOverride(self, pluginAction):
-        device = indigo.devices[pluginAction.deviceId].name
+        device = self._zoneName(indigo.devices[pluginAction.deviceId])
         if device:
             holdTemp = pluginAction.props["overrideTemp"]
             holdHours = pluginAction.props["numberOfHours"]
@@ -875,7 +915,7 @@ class Plugin(indigo.PluginBase):
     # Timeclock and Holiday Action callbacks
     ######################
     def timerBoost(self, pluginAction):
-        device = indigo.devices[pluginAction.deviceId].name
+        device = self._zoneName(indigo.devices[pluginAction.deviceId])
         if device:
             minutes = pluginAction.props.get("boostMinutes", "30")
             update = self.getNeoData("\"TIMER_HOLD_ON\":[%s, \"%s\"]" % (minutes, device))
@@ -885,7 +925,7 @@ class Plugin(indigo.PluginBase):
                 self.logger.error("%s timer boost command failed" % device)
 
     def timerBoostOff(self, pluginAction):
-        device = indigo.devices[pluginAction.deviceId].name
+        device = self._zoneName(indigo.devices[pluginAction.deviceId])
         if device:
             update = self.getNeoData("\"TIMER_HOLD_ON\":[0, \"%s\"]" % device)
             if update and "result" in update:
@@ -932,7 +972,7 @@ class Plugin(indigo.PluginBase):
             self.logger.error("Cancel Holiday command failed")
 
     def awayOn(self, pluginAction):
-        device = indigo.devices[pluginAction.deviceId].name
+        device = self._zoneName(indigo.devices[pluginAction.deviceId])
         update = self.getNeoData('"AWAY_ON":["%s"]' % device)
         if update and "result" in update:
             self.logger.info("%s away mode on" % device)
@@ -940,7 +980,7 @@ class Plugin(indigo.PluginBase):
             self.logger.error("%s away on command failed" % device)
 
     def awayOff(self, pluginAction):
-        device = indigo.devices[pluginAction.deviceId].name
+        device = self._zoneName(indigo.devices[pluginAction.deviceId])
         update = self.getNeoData('"AWAY_OFF":["%s"]' % device)
         if update and "result" in update:
             self.logger.info("%s away mode off" % device)
@@ -948,7 +988,7 @@ class Plugin(indigo.PluginBase):
             self.logger.error("%s away off command failed" % device)
 
     def lockKeypad(self, pluginAction):
-        device = indigo.devices[pluginAction.deviceId].name
+        device = self._zoneName(indigo.devices[pluginAction.deviceId])
         pin = pluginAction.props.get("lockPin", "0000")
         digits = [int(d) for d in pin[:4]]
         update = self.getNeoData('"LOCK":[[%s], ["%s"]]' % (",".join(str(d) for d in digits), device))
@@ -958,7 +998,7 @@ class Plugin(indigo.PluginBase):
             self.logger.error("%s lock keypad command failed" % device)
 
     def unlockKeypad(self, pluginAction):
-        device = indigo.devices[pluginAction.deviceId].name
+        device = self._zoneName(indigo.devices[pluginAction.deviceId])
         update = self.getNeoData('"UNLOCK":["%s"]' % device)
         if update and "result" in update:
             self.logger.info("%s keypad unlocked" % device)
@@ -966,7 +1006,7 @@ class Plugin(indigo.PluginBase):
             self.logger.error("%s unlock keypad command failed" % device)
 
     def cancelHold(self, pluginAction):
-        device = indigo.devices[pluginAction.deviceId].name
+        device = self._zoneName(indigo.devices[pluginAction.deviceId])
         update = self.getNeoData('"HOLD":[{"temp":20, "id":"Off", "hours":0, "minutes":0}, "%s"]' % device)
         if update and "result" in update:
             self.logger.info("%s hold cancelled" % device)
@@ -974,7 +1014,7 @@ class Plugin(indigo.PluginBase):
             self.logger.error("%s cancel hold command failed" % device)
 
     def setFrostTemp(self, pluginAction):
-        device = indigo.devices[pluginAction.deviceId].name
+        device = self._zoneName(indigo.devices[pluginAction.deviceId])
         temp = pluginAction.props.get("frostTemp", "12")
         update = self.getNeoData('"SET_FROST":[%s, "%s"]' % (temp, device))
         if update and "result" in update:
@@ -983,7 +1023,7 @@ class Plugin(indigo.PluginBase):
             self.logger.error("%s set frost temp command failed" % device)
 
     def identifyDevice(self, pluginAction):
-        device = indigo.devices[pluginAction.deviceId].name
+        device = self._zoneName(indigo.devices[pluginAction.deviceId])
         update = self.getNeoData('"IDENTIFY":[1, 3, ["%s"]]' % device)
         if update and "result" in update:
             self.logger.info("%s identify LED flashing" % device)
@@ -991,7 +1031,7 @@ class Plugin(indigo.PluginBase):
             self.logger.error("%s identify command failed" % device)
 
     def getHoursRun(self, pluginAction):
-        device = indigo.devices[pluginAction.deviceId].name
+        device = self._zoneName(indigo.devices[pluginAction.deviceId])
         update = self.getNeoData('"GET_HOURSRUN":"%s"' % device)
         if isinstance(update, dict) and update:
             self.logger.info("%s hours run: %s" % (device, json.dumps(update)))
@@ -999,7 +1039,7 @@ class Plugin(indigo.PluginBase):
             self.logger.error("%s get hours run command failed (response: %r)" % (device, update))
 
     def getTempLog(self, pluginAction):
-        device = indigo.devices[pluginAction.deviceId].name
+        device = self._zoneName(indigo.devices[pluginAction.deviceId])
         update = self.getNeoData('"GET_TEMPLOG":["%s"]' % device)
         if isinstance(update, dict) and update:
             self.logger.info("%s temp log: %s" % (device, json.dumps(update)))
@@ -1023,15 +1063,16 @@ class Plugin(indigo.PluginBase):
     ######################
     # Main switch action bottleneck called by Indigo Server.
     def actionControlDevice(self, action, dev):
+        zone = self._zoneName(dev)
         if action.deviceAction == indigo.kDeviceAction.TurnOn:
-            resDict = self.getNeoData("\"TIMER_ON\":[\""+dev.name+"\"]")
+            resDict = self.getNeoData("\"TIMER_ON\":[\""+zone+"\"]")
             if resDict and "result" in resDict:
                 dev.updateStateOnServer("onOffState", True)
                 dev.updateStateImageOnServer(indigo.kStateImageSel.PowerOn)
             else:
                 self.logger.error("%s turn on command failed" % dev.name)
         elif action.deviceAction == indigo.kDeviceAction.TurnOff:
-            resDict = self.getNeoData("\"TIMER_OFF\":[\""+dev.name+"\"]")
+            resDict = self.getNeoData("\"TIMER_OFF\":[\""+zone+"\"]")
             if resDict and "result" in resDict:
                 dev.updateStateOnServer("onOffState", False)
                 dev.updateStateImageOnServer(indigo.kStateImageSel.PowerOff)
@@ -1046,23 +1087,24 @@ class Plugin(indigo.PluginBase):
     ######################
     # Main thermostat action bottleneck called by Indigo Server.
     def actionControlThermostat(self, action, dev):
+        zone = self._zoneName(dev)
         if action.thermostatAction == indigo.kThermostatAction.SetHeatSetpoint:
             newSetpoint = str(action.actionValue)
-            update = self.getNeoData("\"SET_TEMP\":["+newSetpoint+", \""+dev.name+"\"]")
+            update = self.getNeoData("\"SET_TEMP\":["+newSetpoint+", \""+zone+"\"]")
             if update and "result" in update:
                 dev.updateStateOnServer("setpointHeat", newSetpoint)
                 self.logger.info("%s setpoint set to %s degC" % (dev.name, newSetpoint))
             
         elif action.thermostatAction == indigo.kThermostatAction.DecreaseHeatSetpoint:
             newSetpoint = str(dev.heatSetpoint - action.actionValue)
-            update = self.getNeoData("\"SET_TEMP\":["+newSetpoint+", \""+dev.name+"\"]")
+            update = self.getNeoData("\"SET_TEMP\":["+newSetpoint+", \""+zone+"\"]")
             if update and "result" in update:
                 dev.updateStateOnServer("setpointHeat", newSetpoint)
                 self.logger.info("%s setpoint decreased to %s degC" % (dev.name, newSetpoint))
         
         elif action.thermostatAction == indigo.kThermostatAction.IncreaseHeatSetpoint:
             newSetpoint = str(dev.heatSetpoint + action.actionValue)
-            update = self.getNeoData("\"SET_TEMP\":["+newSetpoint+", \""+dev.name+"\"]")
+            update = self.getNeoData("\"SET_TEMP\":["+newSetpoint+", \""+zone+"\"]")
             if update and "result" in update:
                 dev.updateStateOnServer("setpointHeat", newSetpoint)
                 self.logger.info("%s setpoint increased to %s degC" % (dev.name, newSetpoint))
@@ -1074,23 +1116,23 @@ class Plugin(indigo.PluginBase):
                 return False
             elif newMode == indigo.kHvacMode.HeatCool:
                 self.logger.info("Setting %s to 'Auto' mode" % dev.name)
-                resDict = self.getNeoData("\"FROST_OFF\":[\""+dev.name+"\"]")
+                resDict = self.getNeoData("\"FROST_OFF\":[\""+zone+"\"]")
                 holdTemp = "20"
                 zilch = "0"
-                resDict = self.getNeoData("\"HOLD\":[{\"temp\":"+holdTemp+", \"id\":"+"\"Off\""+", \"hours\":"+zilch+", \"minutes\":"+zilch+"}, \""+dev.name+"\"]")
+                resDict = self.getNeoData("\"HOLD\":[{\"temp\":"+holdTemp+", \"id\":"+"\"Off\""+", \"hours\":"+zilch+", \"minutes\":"+zilch+"}, \""+zone+"\"]")
             elif newMode == indigo.kHvacMode.Heat:
                 self.logger.info("Setting %s to 'Heat' mode" % dev.name)
-                resDict = self.getNeoData("\"FROST_OFF\":[\""+dev.name+"\"]")
+                resDict = self.getNeoData("\"FROST_OFF\":[\""+zone+"\"]")
                 holdTemp = "20"
                 holdHours = "1"
                 holdMins = "0"
-                resDict = self.getNeoData("\"HOLD\":[{\"temp\":"+holdTemp+", \"id\":"+"\"On\""+", \"hours\":"+holdHours+", \"minutes\":"+holdMins+"}, \""+dev.name+"\"]")
+                resDict = self.getNeoData("\"HOLD\":[{\"temp\":"+holdTemp+", \"id\":"+"\"On\""+", \"hours\":"+holdHours+", \"minutes\":"+holdMins+"}, \""+zone+"\"]")
             elif newMode == indigo.kHvacMode.Cool:
                 self.logger.info("Setting %s to 'Cool' mode" % dev.name)
                 holdTemp = "20"
                 zilch = "0"
-                resDict = self.getNeoData("\"HOLD\":[{\"temp\":"+holdTemp+", \"id\":"+"\"Off\""+", \"hours\":"+zilch+", \"minutes\":"+zilch+"}, \""+dev.name+"\"]")
-                resDict = self.getNeoData("\"FROST_ON\":[\""+dev.name+"\"]")
+                resDict = self.getNeoData("\"HOLD\":[{\"temp\":"+holdTemp+", \"id\":"+"\"Off\""+", \"hours\":"+zilch+", \"minutes\":"+zilch+"}, \""+zone+"\"]")
+                resDict = self.getNeoData("\"FROST_ON\":[\""+zone+"\"]")
             if resDict and "result" in resDict:
                 dev.updateStateOnServer("hvacOperationMode", newMode)
             else:

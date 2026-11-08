@@ -24,7 +24,12 @@ class _HvacModeStub:
 indigo_stub = ModuleType("indigo")
 indigo_stub.PluginBase = object  # plugin.py does `class Plugin(indigo.PluginBase)`
 indigo_stub.kHvacMode = _HvacModeStub
+indigo_stub.kThermostatAction = MagicMock()
+indigo_stub.kDeviceAction = MagicMock()
 indigo_stub.devices = MagicMock()
+indigo_stub.device = MagicMock()
+indigo_stub.kProtocol = MagicMock()
+indigo_stub.kStateImageSel = MagicMock()
 indigo_stub.variables = MagicMock()
 indigo_stub.variable = MagicMock()
 indigo_stub.server = MagicMock()
@@ -65,6 +70,9 @@ def plugin():
     p.connectErrorCount = 0
     p.sendErrorCount = 0
     p.neoDevice = None
+    p.responseKeysLogged = True
+    p._deviceListStamp = None
+    p._missingZonesWarned = set()
     p.getNeoData = MagicMock(return_value={"result": "ok"})
     return p
 
@@ -76,6 +84,7 @@ def mock_device():
     dev.name = "TestStat"
     dev.deviceTypeId = "heatmiserNeostat"
     dev.id = 12345
+    dev.pluginProps = {}  # legacy device: no zoneName yet, commands fall back to dev.name
     return dev
 
 
