@@ -40,8 +40,8 @@ def test_zone_list_includes_current_zone_missing_from_hub(plugin):
 
 def test_zone_list_without_values_dict(plugin):
     plugin._knownZones = frozenset({"Hall"})
-    assert plugin.hubZoneList() == [("Hall", "Hall")]
-    assert plugin.hubZoneList(valuesDict=None, typeId="heatmiserNeostat", targetId=0) == [("Hall", "Hall")]
+    assert plugin.hubZoneList() == [("", "Choose a hub zone..."), ("Hall", "Hall")]  # no current zone: empty choice first
+    assert plugin.hubZoneList(valuesDict=None, typeId="heatmiserNeostat", targetId=0) == [("", "Choose a hub zone..."), ("Hall", "Hall")]  # no current zone: empty choice first
 
 
 def test_empty_known_zones_fetches_live_data_once(plugin):
@@ -206,3 +206,55 @@ def test_rename_on_hub_then_rebind_feeds_device_the_new_zone(plugin, by_id):
     args = plugin.updateStatState.call_args.args
     assert args[2] is dev and args[0]["devices"][args[1]]["ZONE_NAME"] == "New"
     assert args[0]["devices"][args[1]]["ACTUAL_TEMP"] == temp_of("New")
+
+
+# ------------------------------------------------------------ hardening
+
+def test_zone_list_for_unbound_device_starts_with_an_empty_choice(plugin):
+    plugin._knownZones = frozenset({"Kitchen", "Hall"})
+    items = plugin.hubZoneList(valuesDict={})
+    assert items[0] == ("", "Choose a hub zone...")
+    assert items[1:] == [("Hall", "Hall"), ("Kitchen", "Kitchen")]
+    # and Save without choosing is refused
+    ok, _, errs = plugin.validateDeviceConfigUi({"zoneName": ""}, "heatmiserNeostat", 1)
+    assert ok is False and "zoneName" in errs
+
+
+def test_validation_carries_over_props_without_a_dialog_field(plugin, by_id):
+    hall = FakeDev("Hall", 0, props={"zoneName": "Hall", "neoDeviceType": "1", "address": "0",
+                                      "SupportsCoolSetpoint": False, "SupportsHvacFanMode": False})
+    by_id.append(hall)
+    plugin._knownZones = frozenset({"Hall", "Lounge"})
+    ok, values = plugin.validateDeviceConfigUi({"zoneName": "Lounge"}, "heatmiserNeostat", hall.id)
+    assert ok is True
+    assert values == {"zoneName": "Lounge", "neoDeviceType": "1", "address": "0",
+                      "SupportsCoolSetpoint": False, "SupportsHvacFanMode": False}
+
+
+def test_real_rename_flow_refuses_until_auto_created_device_is_superseded(plugin, by_id):
+    """Hub renamed 'Old' to 'New'. Discovery auto-created 'New Heatmiser' for the new zone, so the rebind is
+    refused until the user marks that device SUPERSEDED; then the old device is rebound and fed 'New'."""
+    old = bound("Old")
+    auto = bound("New Heatmiser", "New")
+    by_id += [old, auto]
+    plugin._knownZones = frozenset({"New"})
+    respond(plugin, live([stat("New")]))
+    plugin.updateReadings()
+    assert old.errorState == "ZONE NOT ON HUB"
+    plugin.updateStatState.reset_mock()  # that poll fed the auto-created device; only count the rediscovery
+
+    ok, _, errs = plugin.validateDeviceConfigUi({"zoneName": "New"}, "heatmiserNeostat", old.id)
+    assert ok is False and "New Heatmiser" in errs["zoneName"] and "SUPERSEDED" in errs["showAlertText"]
+    assert plugin._pendingRebind == {}
+
+    auto.name = "New Heatmiser SUPERSEDED"  # user retires the auto-created device
+    ok = plugin.validateDeviceConfigUi({"zoneName": "New"}, "heatmiserNeostat", old.id)[0]
+    assert ok is True
+    old.pluginProps["zoneName"] = "New"
+    plugin.closedDeviceConfigUi({"zoneName": "New"}, False, "heatmiserNeostat", old.id)
+    plugin.neohubGen2 = False
+    plugin.updateReadings()  # rediscovery
+    assert plugin._discoveryDone is True
+    fed = [(c.args[2].name, c.args[0]["devices"][c.args[1]]["ZONE_NAME"]) for c in plugin.updateStatState.call_args_list]
+    assert fed == [("Old", "New")]  # the superseded device is not fed, no duplicate created
+    plugin.logger.exception.assert_not_called()

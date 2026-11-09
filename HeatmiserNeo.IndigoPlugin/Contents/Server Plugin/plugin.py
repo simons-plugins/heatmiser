@@ -266,7 +266,12 @@ class Plugin(indigo.PluginBase):
             items = {zone: zone for zone in hubZones}
             if current and current not in items:
                 items[current] = "%s (not on hub)" % current
-            return [(zone, items[zone]) for zone in sorted(items)]
+            result = [(zone, items[zone]) for zone in sorted(items)]
+            if not current:
+                # Unbound device: a menu defaults to its first item, so Save must not silently bind it to the
+                # alphabetically first zone. Offer an empty choice first; validation rejects it.
+                result.insert(0, ("", "Choose a hub zone..."))
+            return result
         except Exception:
             self.logger.exception("Could not build the hub zone list")
             return [(current, "%s (not on hub)" % current)] if current else []
@@ -296,6 +301,14 @@ class Plugin(indigo.PluginBase):
             self._pendingRebind[devId] = (old, zone)
         else:
             self._pendingRebind.pop(devId, None)
+        # Props with no dialog field (neoDeviceType, address, Supports*) must survive the save whatever
+        # Indigo seeds the dialog with, so carry any missing ones over explicitly.
+        try:
+            for key, value in indigo.devices[devId].pluginProps.items():
+                if key not in valuesDict:
+                    valuesDict[key] = value
+        except Exception:
+            self.logger.exception("Could not carry over the existing props of device %s" % devId)
         return (True, valuesDict)
 
     def closedDeviceConfigUi(self, valuesDict, userCancelled, typeId, devId):

@@ -115,6 +115,9 @@ Date		Version		Module							Changes
 												Edit Device -> Hub zone rebinds a
 												device after a zone is renamed on
 												the hub.
+												Zone renamed on the hub: mark the
+												auto-created device SUPERSEDED, then
+												rebind the old one.
 												Devices show HUB UNREACHABLE after three
 												failed polls and recover automatically.
 												Setpoint / HVAC mode / Auto commands now
