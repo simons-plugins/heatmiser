@@ -100,11 +100,15 @@ Date		Version		Module							Changes
 280126		2023.2.1	plugin.py				Fix sensor update issue - skip SUPERSEDED
 												devices in updateReadings().
 
-081126		2026.1.0	plugin.py				Match Indigo devices to hub zones by
+091126		2026.1.1	plugin.py				Match Indigo devices to hub zones by
 												ZONE_NAME (zoneName prop), not list
 												position; removing a stat no longer
 												shifts later devices onto neighbours'
 												readings. Commands use the stored zone
 												name so devices can be renamed in Indigo.
 												Rediscover when the hub device list
-												changes. (#33)
+												changes (Gen 2 hubs; Gen 1 needs a
+												plugin restart). (#33)
+												Devices renamed in Indigo before this
+												version cannot be auto-bound; follow
+												the Event Log warning.

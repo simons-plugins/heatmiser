@@ -86,7 +86,7 @@ def mock_device():
     dev.name = "TestStat"
     dev.deviceTypeId = "heatmiserNeostat"
     dev.id = 12345
-    dev.pluginProps = {}  # legacy device: no zoneName yet, commands fall back to dev.name
+    dev.pluginProps = {"zoneName": "TestStat"}  # bound to its hub zone; unbound devices refuse commands
     return dev
 
 
