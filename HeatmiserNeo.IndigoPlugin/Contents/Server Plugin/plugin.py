@@ -71,6 +71,7 @@ class Plugin(indigo.PluginBase):
         self._zoneListWarned = set()
         self._knownZones = frozenset()
         self._failedPolls = 0
+        self._pendingRebind = {}  # devId -> (old zone, new zone), stashed by validateDeviceConfigUi
 
 
     ########################################
@@ -241,6 +242,75 @@ class Plugin(indigo.PluginBase):
         if name.endswith(" Heatmiser"):
             name = name[: -len(" Heatmiser")].rstrip()
         return name
+
+    # Device ConfigUI: rebind a device to another hub zone (e.g. after a zone rename on the hub)
+
+    def hubZoneList(self, filter="", valuesDict=None, typeId="", targetId=0):
+        """Menu items for the "Hub zone" field: zones from the last discovery, plus the device's current zone.
+
+        Uses _knownZones (no hub round-trip) and only asks the hub if discovery never succeeded.
+        The current value is always present, so a hub outage while the dialog is open cannot blank the binding."""
+        current = None
+        try:
+            current = valuesDict.get("zoneName") if valuesDict else None
+        except Exception:
+            current = None
+        try:
+            hubZones = set(self._knownZones)
+            if not hubZones:
+                reply = self.getNeoData("\"GET_LIVE_DATA\":0" if self.neohubGen2 else "\"INFO\":0")
+                if isinstance(reply, dict):
+                    hubZones = set(self._zonesByName(reply))
+                if not hubZones:
+                    self.logger.debug("hubZoneList: no zone list from the hub; offering only the current zone")
+            items = {zone: zone for zone in hubZones}
+            if current and current not in items:
+                items[current] = "%s (not on hub)" % current
+            return [(zone, items[zone]) for zone in sorted(items)]
+        except Exception:
+            self.logger.exception("Could not build the hub zone list")
+            return [(current, "%s (not on hub)" % current)] if current else []
+
+    def validateDeviceConfigUi(self, valuesDict, typeId, devId):
+        zone = valuesDict.get("zoneName")
+        errorsDict = indigo.Dict()
+        if not zone:
+            errorsDict["zoneName"] = "Choose the hub zone this device is bound to"
+            errorsDict["showAlertText"] = "Choose the hub zone this device is bound to."
+            return (False, valuesDict, errorsDict)
+        for other in self._liveDevices():
+            if other.id != devId and other.pluginProps.get("zoneName") == zone:
+                msg = "Zone '%s' is already bound to device '%s'. Rename that one with SUPERSEDED first." % (zone, other.name)
+                errorsDict["zoneName"] = msg
+                errorsDict["showAlertText"] = msg
+                return (False, valuesDict, errorsDict)
+        # Indigo saves the new props only after this returns True, so this is the last chance to read the old zone.
+        # A zone absent from _knownZones is deliberately accepted: the hub may be unreachable, and the poll
+        # loop flags a genuinely missing zone as ZONE NOT ON HUB.
+        try:
+            old = indigo.devices[devId].pluginProps.get("zoneName") if devId else None
+        except Exception:
+            self.logger.exception("Could not read the current zone of device %s" % devId)
+            old = None
+        if old != zone:
+            self._pendingRebind[devId] = (old, zone)
+        else:
+            self._pendingRebind.pop(devId, None)
+        return (True, valuesDict)
+
+    def closedDeviceConfigUi(self, valuesDict, userCancelled, typeId, devId):
+        # Base implementation is a no-op, so no super() call.
+        change = self._pendingRebind.pop(devId, None)
+        if userCancelled or not change or change[0] == change[1]:
+            return
+        old, new = change
+        try:
+            name = indigo.devices[devId].name
+        except Exception:
+            name = str(devId)
+        self.logger.info("Device '%s' rebound from hub zone '%s' to '%s'; rediscovering" % (name, old, new))
+        self._missingZonesWarned.discard(old)
+        self._discoveryDone = False  # next poll runs createDevices(), which refreshes address/type and error state
 
     def createDevices(self):
         self.commsEnabled = True

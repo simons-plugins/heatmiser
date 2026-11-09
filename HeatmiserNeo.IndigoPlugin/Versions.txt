@@ -112,6 +112,9 @@ Date		Version		Module							Changes
 												Devices renamed in Indigo before this
 												version cannot be auto-bound; follow
 												the Event Log warning.
+												Edit Device -> Hub zone rebinds a
+												device after a zone is renamed on
+												the hub.
 												Devices show HUB UNREACHABLE after three
 												failed polls and recover automatically.
 												Setpoint / HVAC mode / Auto commands now
