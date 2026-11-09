@@ -22,6 +22,8 @@ class FakeDev:
         self.replaced = False
         self.errorState = None
         self.updateStateOnServer = MagicMock()
+        self.updateStatesOnServer = MagicMock()
+        self.updateStateImageOnServer = MagicMock()
 
     def replacePluginPropsOnServer(self, props):
         self.pluginProps = dict(props)
@@ -794,3 +796,17 @@ def test_sync_failure_flagging_cannot_itself_raise(plugin, hub):
     plugin.createDevices()  # must not raise
     assert plugin._discoveryDone is True
     plugin.logger.debug.assert_called()
+
+
+# ------------------------------------------------- sensor offline is an error state
+
+def test_offline_sensor_gets_offline_error_state_and_online_reading_clears_it(plugin):
+    dev = FakeDev("Loft", 3, typeId="heatmiserNeoSensor", props={"zoneName": "Loft", "neoDeviceType": "14"})
+    offline = live([stat("Loft", DEVICE_TYPE=14, OFFLINE=True)])
+    plugin.updateStatState(offline, 0, dev)
+    assert dev.errorState == "OFFLINE"
+    online = live([stat("Loft", DEVICE_TYPE=14, OFFLINE=False)])
+    plugin.updateStatState(online, 0, dev)
+    written = dev.updateStatesOnServer.call_args.args[0]
+    temp = next(s for s in written if s["key"] == "temperatureInput1")
+    assert temp["value"] == temp_of("Loft") and temp.get("clearErrorState") is True

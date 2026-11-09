@@ -649,12 +649,13 @@ class Plugin(indigo.PluginBase):
 
             if devData.get("OFFLINE", False):
                 stateList = [
-                    {"key": "lowBattery", "value": devData.get("LOW_BATTERY", False), "clearErrorState": True},
+                    {"key": "lowBattery", "value": devData.get("LOW_BATTERY", False)},
                     {"key": "sensorValid", "value": False},
                     {"key": "temperatureInput1", "value": 0, "uiValue": "offline"},
                 ]
                 indigoDevice.updateStatesOnServer(stateList)
                 indigoDevice.updateStateImageOnServer(indigo.kStateImageSel.SensorOff)
+                indigoDevice.setErrorStateOnServer('OFFLINE')  # same as stats/timeclocks: offline is an error state, not a healthy "offline" label
                 return
 
             stateList = [
