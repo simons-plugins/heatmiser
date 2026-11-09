@@ -106,9 +106,13 @@ Date		Version		Module							Changes
 												shifts later devices onto neighbours'
 												readings. Commands use the stored zone
 												name so devices can be renamed in Indigo.
-												Rediscover when the hub device list
-												changes (Gen 2 hubs; Gen 1 needs a
-												plugin restart). (#33)
+												Rediscover when the hub reports a
+												changed list (Gen 2) or a new zone
+												(both generations). (#33)
 												Devices renamed in Indigo before this
 												version cannot be auto-bound; follow
 												the Event Log warning.
+												Devices show HUB UNREACHABLE after three
+												failed polls and recover automatically.
+												Setpoint / HVAC mode / Auto commands now
+												log failures.

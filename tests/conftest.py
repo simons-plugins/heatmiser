@@ -19,6 +19,7 @@ class _HvacModeStub:
     Heat = "Heat"
     Cool = "Cool"
     Off = "Off"
+    HeatCool = "HeatCool"
 
 
 indigo_stub = ModuleType("indigo")
@@ -75,6 +76,9 @@ def plugin():
     p._discoveryDone = True
     p._hubHostZone = None
     p._missingZonesWarned = set()
+    p._zoneListWarned = set()
+    p._knownZones = frozenset()
+    p._failedPolls = 0
     p.getNeoData = MagicMock(return_value={"result": "ok"})
     return p
 

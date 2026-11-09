@@ -68,6 +68,9 @@ class Plugin(indigo.PluginBase):
         self._discoveryDone = False
         self._hubHostZone = None
         self._missingZonesWarned = set()
+        self._zoneListWarned = set()
+        self._knownZones = frozenset()
+        self._failedPolls = 0
 
 
     ########################################
@@ -208,13 +211,27 @@ class Plugin(indigo.PluginBase):
         return dev.pluginProps.get("zoneName") or None
 
     def _zonesByName(self, neoInfo):
-        """{ZONE_NAME: (hub list index, device data)} from a live-data response."""
+        """{ZONE_NAME: (hub list index, device data)} from a live-data response.
+
+        Entries that cannot be used are logged (once per discovery, not every poll):
+        a nameless entry is ignored, and when a name appears twice the first entry wins."""
         zones = {}
         for index, devData in enumerate(neoInfo.get("devices", [])):
             name = devData.get("ZONE_NAME", devData.get("device"))
-            if name:
-                zones[name] = (index, devData)
+            if not name:
+                self._warnZoneListOnce("nameless %d" % index, "Hub device list entry %d has no zone name; ignoring it" % index)
+                continue
+            if name in zones:
+                self._warnZoneListOnce("duplicate %s" % name,
+                                       "Hub lists zone '%s' twice (entries %d and %d); using the first" % (name, zones[name][0], index))
+                continue
+            zones[name] = (index, devData)
         return zones
+
+    def _warnZoneListOnce(self, key, message):
+        if key not in self._zoneListWarned:
+            self._zoneListWarned.add(key)
+            self.logger.warning(message)
 
     @staticmethod
     def _legacyZoneName(indigoName):
@@ -246,6 +263,7 @@ class Plugin(indigo.PluginBase):
             return
         stamp = neoInfo.get("TIMESTAMP_DEVICE_LISTS")
         self._missingZonesWarned = set()
+        self._zoneListWarned = set()
         zones = self._zonesByName(neoInfo)
         self._hubHostZone = next((z for z, (i, _) in zones.items() if i == 0), None)
 
@@ -317,6 +335,7 @@ class Plugin(indigo.PluginBase):
                 except Exception as exc:
                     self.logger.debug("Could not set SYNC FAILED on '%s': %s" % (claimed[zoneName].name, exc))
         self._deviceListStamp = stamp
+        self._knownZones = frozenset(zones)
         self._discoveryDone = True
 
     def _syncZoneDevice(self, neoInfo, zoneName, index, devData, device, deviceTypeMap, holdCreation):
@@ -380,6 +399,15 @@ class Plugin(indigo.PluginBase):
     def updateReadings(self):
         update = self.getNeoData("\"GET_LIVE_DATA\":0" if self.neohubGen2 else "\"INFO\":0")
         if update != "":
+            if self._failedPolls >= 3:
+                self.logger.info("Hub reachable again; clearing HUB UNREACHABLE")
+                # updateStatesOnServer's list form is not documented to clear the error state, and some readings
+                # (e.g. an offline stat) never do, so clear it explicitly. The per-device loop below then
+                # re-asserts ZONE NOT ON HUB / DUPLICATE ZONE / OFFLINE where they still apply.
+                for dev in self._liveDevices():
+                    if self._zoneName(dev):
+                        dev.setErrorStateOnServer(None)
+            self._failedPolls = 0
             # Log response keys once on first successful response for field name verification
             if not self.responseKeysLogged and update.get("devices"):
                 self.logger.info("GET_LIVE_DATA top-level keys: %s" % list(update.keys()))
@@ -395,17 +423,26 @@ class Plugin(indigo.PluginBase):
                 self.logger.info("Device discovery has not completed yet; running it now")
                 self.createDevices()
                 return
-            # Gen 1 INFO has no TIMESTAMP_DEVICE_LISTS, so stamp is None there
+            # The stamp catches Gen 2 device-list changes; the new-zone check below catches additions on both
+            # generations (Gen 1 INFO has no TIMESTAMP_DEVICE_LISTS, so stamp is None there).
             if stamp is not None and stamp != self._deviceListStamp:
                 self.logger.info("Hub device list changed; rediscovering devices")
                 self.createDevices()
                 return
             zones = self._zonesByName(update)
+            # Only ADDED zones trigger rediscovery. A zone that vanishes is handled per poll (ZONE NOT ON HUB) and
+            # recovers by itself; an offline stat dropping out of the list must not churn discovery.
+            newZones = [z for z in zones if z not in self._knownZones]
+            if newZones:
+                self.logger.info("New hub zone(s) %s; rediscovering devices" % ", ".join(newZones))
+                self.createDevices()
+                return
             seen = set()
             for dev in self._liveDevices():
                 zoneName = dev.pluginProps.get("zoneName")
                 if not zoneName:
-                    continue  # pre-migration device; createDevices has already warned and set its error state
+                    dev.setErrorStateOnServer("NO HUB ZONE")  # createDevices warned; re-assert so a HUB UNREACHABLE clear doesn't leave it stale
+                    continue
                 if zoneName in seen:
                     dev.setErrorStateOnServer("DUPLICATE ZONE")  # createDevices warned; the first device wins
                     continue
@@ -418,17 +455,27 @@ class Plugin(indigo.PluginBase):
                     continue
                 self._missingZonesWarned.discard(zoneName)
                 self.updateStatState(update, zones[zoneName][0], dev)
+        else:
+            self._failedPolls += 1
+            if self._failedPolls == 3:
+                self.logger.warning("Hub unreachable for %d polls; marking devices HUB UNREACHABLE" % self._failedPolls)
+            if self._failedPolls >= 3:
+                for dev in self._liveDevices():
+                    dev.setErrorStateOnServer("HUB UNREACHABLE")
 
     def _hubHostDevice(self):
-        """Return the live device that owns hub-level states.
+        """Return the live neostat that owns hub-level states.
 
-        Hub-level info (firmware, DST, NTP, program format) is written
-        onto the device bound to the hub zone at list position 0, as
-        recorded by the last createDevices(). We re-resolve per call
-        rather than caching, so the host device is always the current
-        one after any rediscovery or SUPERSEDED replacement.
+        Hub-level info (firmware, DST, NTP, units, program format) exists
+        only on heatmiserNeostat (see Devices.xml). It is written onto the
+        device bound to the hub zone at list position 0 (as recorded by the
+        last createDevices()) when that is a neostat; otherwise onto the
+        bound neostat with the lowest numeric address (non-numeric last).
+        If there is no neostat, returns None. We re-resolve per call rather
+        than caching, so the host device is always the current one after any
+        rediscovery or SUPERSEDED replacement.
 
-        Fallback (before discovery has completed): whichever live device
+        Fallback (before discovery has completed): whichever live neostat
         has address 0. Non-numeric addresses are skipped silently. Addresses
         are refreshed only for bound devices, so once discovery has completed
         a stale address is never trusted.
@@ -437,14 +484,27 @@ class Plugin(indigo.PluginBase):
         if hostZone:
             for dev in self._liveDevices():
                 if dev.pluginProps.get("zoneName") == hostZone:
-                    return dev
+                    if dev.deviceTypeId == "heatmiserNeostat":
+                        return dev
+                    break
         if self._discoveryDone:
-            self.logger.debug("No live device is bound to hub host zone '%s'; hub-level states not updated" % hostZone)
-            return None
+            def addressKey(dev):
+                try:
+                    return (0, int(dev.address))
+                except (TypeError, ValueError):
+                    return (1, 0)
+            neostats = sorted((d for d in self._liveDevices()
+                               if self._zoneName(d) and d.deviceTypeId == "heatmiserNeostat"), key=addressKey)
+            if not neostats:
+                self.logger.debug("No live bound neostat for hub-level states (host zone '%s'); hub-level states not updated" % hostZone)
+                return None
+            self.logger.debug("Hub host zone '%s' has no neostat device; using '%s' (lowest-address bound neostat) for hub-level states"
+                              % (hostZone, neostats[0].name))
+            return neostats[0]
         host = None
         duplicates = []
         for dev in indigo.devices.iter("self"):
-            if "SUPERSEDED" in dev.name:
+            if "SUPERSEDED" in dev.name or dev.deviceTypeId != "heatmiserNeostat":
                 continue
             try:
                 if int(dev.address) != 0:
@@ -589,7 +649,7 @@ class Plugin(indigo.PluginBase):
 
             if devData.get("OFFLINE", False):
                 stateList = [
-                    {"key": "lowBattery", "value": devData.get("LOW_BATTERY", False)},
+                    {"key": "lowBattery", "value": devData.get("LOW_BATTERY", False), "clearErrorState": True},
                     {"key": "sensorValid", "value": False},
                     {"key": "temperatureInput1", "value": 0, "uiValue": "offline"},
                 ]
@@ -870,7 +930,10 @@ class Plugin(indigo.PluginBase):
                 # Skip sensors, neoplugs, and timeclocks — they don't have engineering states
                 if dev.deviceTypeId in ("heatmiserNeoSensor", "heatmiserNeoplug", "heatmiserNeoTimeclock"):
                     continue
-                if not zoneName or zoneName not in update:
+                if not zoneName:
+                    continue
+                if zoneName not in update:
+                    self.logger.debug("GET_ENGINEERS has no entry for zone '%s' (device '%s')" % (zoneName, dev.name))
                     continue
                 try:
                     devData = update[zoneName]
@@ -983,6 +1046,9 @@ class Plugin(indigo.PluginBase):
         zilch = "0"
         holdTemp = "20"
         update = self.getNeoData("\"FROST_OFF\":[\""+device+"\"]")
+        if not (update and "result" in update):
+            self.logger.error("%s Auto command failed (FROST_OFF)" % device)
+            return
         update = self.getNeoData("\"HOLD\":[{\"temp\":"+holdTemp+", \"id\":"+"\"Off\""+", \"hours\":"+zilch+", \"minutes\":"+zilch+"}, \""+device+"\"]")
         if update and "result" in update:
             self.logger.info("%s set to Auto" % device)
@@ -1243,6 +1309,8 @@ class Plugin(indigo.PluginBase):
             if update and "result" in update:
                 dev.updateStateOnServer("setpointHeat", newSetpoint)
                 self.logger.info("%s setpoint set to %s degC" % (dev.name, newSetpoint))
+            else:
+                self.logger.error("%s setpoint command failed" % dev.name)
             
         elif action.thermostatAction == indigo.kThermostatAction.DecreaseHeatSetpoint:
             newSetpoint = str(dev.heatSetpoint - action.actionValue)
@@ -1250,6 +1318,8 @@ class Plugin(indigo.PluginBase):
             if update and "result" in update:
                 dev.updateStateOnServer("setpointHeat", newSetpoint)
                 self.logger.info("%s setpoint decreased to %s degC" % (dev.name, newSetpoint))
+            else:
+                self.logger.error("%s setpoint command failed" % dev.name)
         
         elif action.thermostatAction == indigo.kThermostatAction.IncreaseHeatSetpoint:
             newSetpoint = str(dev.heatSetpoint + action.actionValue)
@@ -1257,21 +1327,30 @@ class Plugin(indigo.PluginBase):
             if update and "result" in update:
                 dev.updateStateOnServer("setpointHeat", newSetpoint)
                 self.logger.info("%s setpoint increased to %s degC" % (dev.name, newSetpoint))
+            else:
+                self.logger.error("%s setpoint command failed" % dev.name)
                     
         elif action.thermostatAction == indigo.kThermostatAction.SetHvacMode:
             newMode = action.actionMode
+            resDict = None
             if newMode == indigo.kHvacMode.Off:
                 self.logger.error("Thermostat does not have an 'Off' mode")
                 return False
             elif newMode == indigo.kHvacMode.HeatCool:
                 self.logger.info("Setting %s to 'Auto' mode" % dev.name)
                 resDict = self.getNeoData("\"FROST_OFF\":[\""+zone+"\"]")
+                if not (resDict and "result" in resDict):
+                    self.logger.error("%s SetHvacMode: FROST_OFF command failed" % dev.name)
+                    return
                 holdTemp = "20"
                 zilch = "0"
                 resDict = self.getNeoData("\"HOLD\":[{\"temp\":"+holdTemp+", \"id\":"+"\"Off\""+", \"hours\":"+zilch+", \"minutes\":"+zilch+"}, \""+zone+"\"]")
             elif newMode == indigo.kHvacMode.Heat:
                 self.logger.info("Setting %s to 'Heat' mode" % dev.name)
                 resDict = self.getNeoData("\"FROST_OFF\":[\""+zone+"\"]")
+                if not (resDict and "result" in resDict):
+                    self.logger.error("%s SetHvacMode: FROST_OFF command failed" % dev.name)
+                    return
                 holdTemp = "20"
                 holdHours = "1"
                 holdMins = "0"
@@ -1281,7 +1360,13 @@ class Plugin(indigo.PluginBase):
                 holdTemp = "20"
                 zilch = "0"
                 resDict = self.getNeoData("\"HOLD\":[{\"temp\":"+holdTemp+", \"id\":"+"\"Off\""+", \"hours\":"+zilch+", \"minutes\":"+zilch+"}, \""+zone+"\"]")
+                if not (resDict and "result" in resDict):
+                    self.logger.error("%s SetHvacMode: HOLD command failed" % dev.name)
+                    return
                 resDict = self.getNeoData("\"FROST_ON\":[\""+zone+"\"]")
+            else:
+                self.logger.error("%s: HVAC mode %s is not supported" % (dev.name, newMode))
+                return
             if resDict and "result" in resDict:
                 dev.updateStateOnServer("hvacOperationMode", newMode)
             else:
