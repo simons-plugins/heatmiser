@@ -19,15 +19,28 @@ class _HvacModeStub:
     Heat = "Heat"
     Cool = "Cool"
     Off = "Off"
+    HeatCool = "HeatCool"
 
 
 indigo_stub = ModuleType("indigo")
 indigo_stub.PluginBase = object  # plugin.py does `class Plugin(indigo.PluginBase)`
 indigo_stub.kHvacMode = _HvacModeStub
+indigo_stub.kThermostatAction = MagicMock()
+indigo_stub.kDeviceAction = MagicMock()
 indigo_stub.devices = MagicMock()
+indigo_stub.device = MagicMock()
+indigo_stub.kProtocol = MagicMock()
+indigo_stub.kStateImageSel = MagicMock()
 indigo_stub.variables = MagicMock()
 indigo_stub.variable = MagicMock()
 indigo_stub.server = MagicMock()
+
+
+class _IndigoDict(dict):
+    """indigo.Dict stand-in; a dict subclass so tests can assert a plain dict was not returned."""
+
+
+indigo_stub.Dict = _IndigoDict
 sys.modules["indigo"] = indigo_stub
 # Indigo's runtime injects `indigo` as an implicit global; plugin.py never
 # does `import indigo`. Put it in builtins so the plugin module sees it.
@@ -65,6 +78,15 @@ def plugin():
     p.connectErrorCount = 0
     p.sendErrorCount = 0
     p.neoDevice = None
+    p.responseKeysLogged = True
+    p._deviceListStamp = None
+    p._discoveryDone = True
+    p._hubHostZone = None
+    p._missingZonesWarned = set()
+    p._zoneListWarned = set()
+    p._knownZones = frozenset()
+    p._failedPolls = 0
+    p._pendingRebind = {}
     p.getNeoData = MagicMock(return_value={"result": "ok"})
     return p
 
@@ -76,6 +98,7 @@ def mock_device():
     dev.name = "TestStat"
     dev.deviceTypeId = "heatmiserNeostat"
     dev.id = 12345
+    dev.pluginProps = {"zoneName": "TestStat"}  # bound to its hub zone; unbound devices refuse commands
     return dev
 
 

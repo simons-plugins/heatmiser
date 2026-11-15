@@ -54,7 +54,7 @@ All commands are sent as JSON objects: `{"COMMAND":value}`. The WSS path wraps t
 
 ### Concurrent Thread Architecture
 
-The plugin runs a continuous monitoring thread ([plugin.py:84-108](HeatmiserNeo.IndigoPlugin/Contents/Server Plugin/plugin.py#L84-L108)) that:
+The plugin runs a continuous monitoring thread (`runConcurrentThread` in `plugin.py`) that:
 
 1. **Every 30 seconds**: Polls Neohub for device status updates via `INFO` command
 2. **Once daily at specific times**:
@@ -67,14 +67,17 @@ The plugin runs a continuous monitoring thread ([plugin.py:84-108](HeatmiserNeo.
 
 ### Device Auto-Discovery
 
-On startup, the plugin queries the Neohub for all connected devices ([plugin.py:144-186](HeatmiserNeo.IndigoPlugin/Contents/Server Plugin/plugin.py#L144-L186)):
+On startup, on the first successful poll if startup discovery failed, and whenever the hub reports a changed device list (`TIMESTAMP_DEVICE_LISTS` in `GET_LIVE_DATA` changes; Gen 2 only) or a hub zone not seen at the last discovery (both generations; Gen 1 `INFO` has no stamp), `createDevices()` queries the Neohub for all connected devices:
 
-1. Sends `{"INFO":0}` command to discover devices
-2. Creates Indigo device for each physical device (if not already created)
-3. Uses the device's array index in the Neohub as the Indigo device address
-4. Automatically determines device type and creates appropriate Indigo device
-
-**Device Naming Restriction**: Device names from Heatmiser must be valid Python identifiers (no spaces, special characters except underscore). The plugin validates this with `isidentifier()` and logs an error if invalid.
+1. Sends `GET_LIVE_DATA` (Gen 2) or `INFO` (Gen 1) and indexes the result by `ZONE_NAME` (Gen 1: `device`)
+2. Each Indigo device is bound to its hub zone by the `zoneName` plugin prop — **never by list position**. Removing a stat from the hub shifts every later entry up one slot, and position matching silently fed each device its neighbour's readings (issue #33).
+3. Devices without `zoneName` (created before 2026.1.1) are migrated by Indigo name (allowing a trailing ` Heatmiser`). A device renamed in Indigo before upgrading cannot be matched safely: it is left alone (error state `NO HUB ZONE`) with a warning telling the user to rename it to exactly the hub zone name (or `<zone> Heatmiser`), restart, then rename it as they like. If its stat is no longer on the hub, the user adds `SUPERSEDED` to its name or deletes it.
+4. Every hub zone with no claiming device gets a new Indigo device of the right type (named `<zone> Heatmiser` if Indigo already has a device with the zone's name). Creation is **held** while any legacy device is unmatched, so the user's rename-and-restart fix stays possible; the hold lifts once every unmatched legacy device is bound or retired (`SUPERSEDED`/deleted). A device whose zone has left the hub, or a legacy device with no matching zone, is warned about, put in an error state, and not updated. A hub-side zone rename orphans its device (`ZONE NOT ON HUB`) and creates a new device for the new name unless creation is held; to repoint it, use **Edit Device → Hub zone** (a menu of the hub's zones, defaulting to the stored `zoneName`); validation refuses a zone another live device already claims (rename that device with `SUPERSEDED` first), and a change logs the rebind and sets `_discoveryDone = False` so the next poll (≤30 s) runs `createDevices()`. When two devices claim one zone the first wins and the loser gets `DUPLICATE ZONE`. A device type change is deferred while creation is held (the old device is kept and still updated). A new zone whose device type is unknown (type 0 or `GET_ENGINEERS` failed) is not created until a later discovery sees its type.
+5. Rediscovery is triggered only by stamp changes and by **new** zones. A zone that vanishes never triggers it: that device goes `ZONE NOT ON HUB` per poll and recovers by itself, so an offline stat dropping out of the list cannot churn discovery. Unusable list entries (no zone name, duplicate zone name — the first wins) are logged once per discovery.
+6. If the hub fails to answer three polls in a row, every live device gets error state `HUB UNREACHABLE` (one warning, re-asserted each failed poll). The first good response clears it on bound devices and the per-device loop re-asserts `NO HUB ZONE` / `ZONE NOT ON HUB` / `DUPLICATE ZONE` / `OFFLINE` where they still apply.
+7. Hub-level states (`HubFirmwareVersion`, DST, NTP, units, program format) exist only on `heatmiserNeostat`, so they always go to a neostat: the device bound to the position-0 zone if it is one, else the bound neostat with the lowest numeric `address`. No neostat means they are not written.
+8. `address` mirrors the hub list position (refreshed via `pluginProps["address"]` for bound devices on each discovery) and is used only for display and for the pre-discovery hub-host fallback
+9. Commands (`SET_TEMP`, `HOLD`, `TIMER_ON`, …) and `GET_ENGINEERS` lookups use `zoneName`. Once bound (`zoneName` set), devices can be renamed freely; unbound devices refuse commands with an Event Log error.
 
 ### Supported Device Types
 
@@ -176,14 +179,14 @@ The WSS path does not need this — WebSocket messages are framed at the protoco
 
 ### JSON Parsing Resilience
 
-The plugin strips extraneous non-printable characters before JSON parsing ([plugin.py:298](HeatmiserNeo.IndigoPlugin/Contents/Server Plugin/plugin.py#L298)):
+The plugin strips extraneous non-printable characters before JSON parsing (in `_get_neo_data_tcp`):
 ```python
 datak = re.sub(b'[^\s!-~]', b'', dataj)  # Filter characters outside printable ASCII range
 ```
 
 ### Device Superseding
 
-Devices with "SUPERSEDED" in their name are ignored during discovery and updates ([plugin.py:158, 397](HeatmiserNeo.IndigoPlugin/Contents/Server Plugin/plugin.py#L158)). This allows graceful device replacement without deleting old device records.
+Devices with "SUPERSEDED" in their name are ignored during discovery and updates (see `_liveDevices`, `updateEng`, `_hubHostDevice`). This allows graceful device replacement without deleting old device records.
 
 ## Testing the Plugin
 
@@ -216,13 +219,6 @@ All Neohub commands are sent via `getNeoData()` method. Common commands:
 - `{"TIMER_ON":["DeviceName"]}` - Turn on NeoPlug
 
 ## Important Constraints
-
-### Device Names
-Heatmiser device names **must** be valid Python identifiers:
-- ✅ `Living_Room`, `Bedroom1`, `Hall`
-- ❌ `Living Room` (space), `Bed/Room` (slash), `Hall-way` (hyphen)
-
-If invalid names are detected, the plugin logs an error and you must rename the device on the Neohub.
 
 ### Cooling Not Supported
 Heatmiser Neo devices don't support cooling. The "Cool" mode in Indigo is mapped to frost protection. Indigo commands for cool setpoints are ignored.
